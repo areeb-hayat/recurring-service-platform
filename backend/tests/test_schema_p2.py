@@ -52,10 +52,27 @@ class TestP2TablesExist:
             == 1
         )
 
-    def test_the_migration_chain_is_at_the_p2_head(self, engine):
-        assert _scalar(engine, "SELECT version_num FROM alembic_version") == (
-            "0002_p2_financial_engine"
-        )
+    def test_the_p2_migration_is_in_the_applied_chain(self, engine):
+        """P2's revision is an ancestor of whatever the current head is.
+
+        Deliberately not "the head *is* P2": later packages move the head, and a
+        test that pins it would fail every time one legitimately does. What must
+        stay true is that the applied chain still runs through P2 — so a future
+        migration cannot quietly drop it and leave these tables unexplained.
+        """
+        import os
+
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cfg = Config(os.path.join(root, "alembic.ini"))
+        cfg.set_main_option("script_location", os.path.join(root, "alembic"))
+        script = ScriptDirectory.from_config(cfg)
+
+        current = _scalar(engine, "SELECT version_num FROM alembic_version")
+        ancestry = {rev.revision for rev in script.walk_revisions("base", current)}
+        assert "0002_p2_financial_engine" in ancestry
 
 
 class TestPostingCycleForeignKey:

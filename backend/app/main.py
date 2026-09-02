@@ -18,6 +18,7 @@ from app.api.routes import (
     billing_router,
     customer_router,
     payment_router,
+    platform_commission_router,
     service_router,
     statement_router,
 )
@@ -35,7 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Recurring Service, Billing & Collection Platform",
         version="0.1.0",
-        description="P1 backend foundation + P2 financial engine.",
+        description="P1 backend foundation + P2 financial engine + P3 commission engine.",
     )
     app.state.settings = settings
 
@@ -79,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(billing_router)
     app.include_router(statement_router)
     app.include_router(payment_router)
+    app.include_router(platform_commission_router)
     return app
 
 

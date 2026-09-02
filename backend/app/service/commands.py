@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.audit.models import AuditAction, AuditSource
 from app.audit.service import record_tenant_event, snapshot
 from app.billing.ledger import post_service_adjustment, post_service_charge
+from app.commission import engine as commission
 from app.core.clock import validate_service_date
 from app.core.db import next_row_version
 from app.core.errors import (
@@ -254,6 +255,10 @@ def record_service(
     if record.kind == ServiceKind.SERVICE:
         post_service_charge(session, ctx, record)
 
+    # COM-2: commission is earned inside the transaction that accepts the source
+    # business event, never by the device that recorded it. A SKIP earns nothing.
+    commission.on_service_recorded(session, ctx, record)
+
     record_tenant_event(
         session,
         ctx,
@@ -360,6 +365,13 @@ def correct_service(
         source_id=original.id,
     )
 
+    # COM-4: the commission adjustment mirrors the ledger adjustment — same
+    # source identity, same transaction — but is computed with the terms
+    # snapshotted on the original earning event, not with today's plan.
+    commission.on_service_corrected(
+        session, ctx, original=original, replacement=replacement, reason=reason
+    )
+
     record_tenant_event(
         session,
         ctx,
@@ -411,6 +423,8 @@ def void_service(
         occurred_on=record.service_date,
         source_id=record.id,
     )
+
+    commission.on_service_voided(session, ctx, record, reason=reason)
 
     record_tenant_event(
         session,

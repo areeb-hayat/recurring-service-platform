@@ -16,7 +16,7 @@ from typing import Literal
 from app.core.clock import Clock, business_date
 from app.core.errors import PermissionDeniedError
 
-__all__ = ["Principal", "TenantContext", "Scope"]
+__all__ = ["Principal", "TenantContext", "PlatformContext", "Scope"]
 
 Scope = Literal["TENANT", "PLATFORM"]
 
@@ -82,4 +82,54 @@ class TenantContext:
             currency_exponent=tenant.currency_exponent,
             cycle_type=tenant.cycle_type,
             cycle_start_day=tenant.cycle_start_day,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformContext:
+    """Platform-scope authority over one explicitly chosen tenant (P0 §11).
+
+    The mirror image of :class:`TenantContext`, and deliberately a separate type
+    rather than a flag on it. A tenant principal can never produce one, and the
+    target ``tenant_id`` comes from the platform caller's explicit choice rather
+    than from a token claim — which is the whole difference between "the owner
+    reading their own data" and "the platform acting on a named tenant".
+
+    It exposes ``tenant_id`` and ``user_id`` with the same names
+    :func:`~app.sync.idempotency.execute_idempotent` reads, so platform commands
+    get the existing idempotency register rather than a second one.
+
+    It carries no ``unit_label``, ``cycle_type`` or ``cycle_start_day``: commission
+    is not a billing operation and has no business touching the tenant's cycle
+    configuration. ``currency`` is present only to check that a plan is written in
+    the tenant's own currency.
+    """
+
+    tenant_id: uuid.UUID
+    user_id: uuid.UUID
+    role: str
+    timezone: str
+    now: datetime
+    today: date
+    currency: str
+    currency_exponent: int
+
+    @classmethod
+    def build(cls, *, principal: Principal, tenant, clock: Clock) -> "PlatformContext":
+        if not principal.is_platform or principal.tenant_id is not None:
+            # SEC-6 / COM-7, from the other side: a tenant principal has no
+            # platform authority over anyone, including itself.
+            raise PermissionDeniedError(
+                "only a platform principal may act in platform scope"
+            )
+        now = clock.now_utc()
+        return cls(
+            tenant_id=tenant.id,
+            user_id=principal.user_id,
+            role=principal.role,
+            timezone=tenant.timezone,
+            now=now,
+            today=business_date(now, tenant.timezone),
+            currency=tenant.currency,
+            currency_exponent=tenant.currency_exponent,
         )

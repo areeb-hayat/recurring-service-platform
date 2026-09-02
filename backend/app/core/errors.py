@@ -20,6 +20,7 @@ __all__ = [
     "IdempotencyKeyReuseError",
     "CyclePeriodNotEndedError",
     "CycleRolloverRequiredError",
+    "CommissionPlanOverlapError",
 ]
 
 
@@ -114,6 +115,19 @@ class CycleRolloverRequiredError(ConflictError):
     """
 
     code = "CYCLE_ROLLOVER_REQUIRED"
+
+
+class CommissionPlanOverlapError(ConflictError):
+    """P0 §6: commission plan effective ranges must not overlap for a tenant.
+
+    Two plans covering the same date would make "the terms in force" ambiguous,
+    and the engine snapshots those terms onto immutable history — so the ambiguity
+    would be baked into rows nobody can correct. Refused rather than resolved by
+    a precedence rule nobody agreed to. The database enforces the same thing with
+    an EXCLUDE constraint; this is the readable message.
+    """
+
+    code = "COMMISSION_PLAN_OVERLAP"
 
 
 class ServiceAlreadyRecordedError(ConflictError):

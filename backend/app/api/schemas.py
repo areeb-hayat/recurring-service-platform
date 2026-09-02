@@ -27,6 +27,8 @@ __all__ = [
     "CloseCycleRequest",
     "RecordPaymentRequest",
     "VoidPaymentRequest",
+    "CreateCommissionPlanRequest",
+    "RecordCommissionSettlementRequest",
     "OperationResponse",
 ]
 
@@ -159,6 +161,46 @@ class RecordPaymentRequest(_Base):
 class VoidPaymentRequest(_Base):
     operation_id: uuid.UUID
     reason: NonEmptyStr  # AUD-6
+
+
+# --- platform commission (P0 §11; platform scope only) -----------------------
+#
+# ``tenant_id`` is in the body rather than derived from the token *because* these
+# are platform routes: the platform principal has no tenant of its own, so the
+# target tenant is an explicit choice it makes and is auditable as such. That is
+# the exact opposite of a tenant route, where reading the tenant from the request
+# would be the SEC-3 defect.
+
+
+class CreateCommissionPlanRequest(_Base):
+    operation_id: uuid.UUID
+    tenant_id: uuid.UUID
+    basis: Literal["RECORDED_VALUE", "BILLED_VALUE", "COLLECTED_VALUE", "PER_EVENT"]
+    # COM-9: an integer count of basis points, 0..10000. Never a decimal rate and
+    # never a float. Exactly one of these two is set, decided by the basis.
+    rate_bp: int | None = Field(default=None, ge=0, le=10000)
+    fixed_amount_minor: int | None = Field(default=None, ge=0)
+    # Omit to use the tenant's own currency; it may not be anything else.
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    effective_from: date
+    effective_to: date | None = None
+
+
+class RecordCommissionSettlementRequest(_Base):
+    operation_id: uuid.UUID
+    tenant_id: uuid.UUID
+    period_start: date
+    period_end: date
+    # FIN-1: integer minor units, and strictly positive — a settlement is money
+    # that moved. A negative row would be a commission adjustment in disguise,
+    # bypassing the snapshotted terms and source traceability COM-4 requires.
+    # Over-settlement is unaffected: 1200 against 1000 earned is a positive row
+    # that leaves outstanding at -200 (A-COM-6b).
+    amount_minor: int = Field(gt=0)
+    # Omit for "today", resolved server-side from the tenant timezone (R4).
+    settled_on: date | None = None
+    reference: str | None = Field(default=None, max_length=120)
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class OperationResponse(_Base):

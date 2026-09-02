@@ -50,14 +50,14 @@ class TestTableInventory:
             # Later packages — must not exist yet.
             "reminder",
             "communication_log",
-            "commission_plan",
-            "commission_event",
-            "commission_adjustment",
-            "commission_settlement",
             "job_run",
             # Removed from scope entirely / never to exist.
             "payment_attempt",
             "payment_provider",
+            # COM-11: V1 settles in aggregate. A settlement-allocation table is a
+            # later decision, never a column or table retrofitted now.
+            "commission_settlement_allocation",
+            "settlement_allocation",
             "voice_transcript",
             "audio_recording",
             "transcript",

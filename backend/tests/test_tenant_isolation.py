@@ -41,19 +41,37 @@ def _flatten(routes):
             yield route
 
 
-def tenant_scoped_routes(app) -> list[tuple[str, str]]:
-    """Every non-auth, non-meta API route, taken from the app's own route table."""
+def _api_routes(app, *, prefix: str) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for route in _flatten(app.routes):
         path = getattr(route, "path", "") or ""
         methods = getattr(route, "methods", None)
-        if not methods or not path.startswith("/api/v1"):
-            continue
-        if path.startswith("/api/v1/auth"):
+        if not methods or not path.startswith(prefix):
             continue
         for method in sorted(methods - {"HEAD", "OPTIONS"}):
             out.append((method, path))
     return sorted(out)
+
+
+def tenant_scoped_routes(app) -> list[tuple[str, str]]:
+    """Every tenant business route, taken from the app's own route table.
+
+    Auth is excluded because it is unauthenticated by definition, and
+    ``/api/v1/platform`` because those routes are the *opposite* assertion: a
+    platform token must be accepted there and a tenant token refused. Mixing the
+    two lists would make one of the two guarantees untestable.
+    """
+    return sorted(
+        r
+        for r in _api_routes(app, prefix="/api/v1")
+        if not r[1].startswith("/api/v1/auth")
+        and not r[1].startswith("/api/v1/platform")
+    )
+
+
+def platform_scoped_routes(app) -> list[tuple[str, str]]:
+    """Every platform-scope route (P0 §15)."""
+    return _api_routes(app, prefix="/api/v1/platform")
 
 
 @pytest.fixture
@@ -266,14 +284,63 @@ class TestSEC6ScopeSeparation:
             if resp.status_code == 403:
                 assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
 
-    def test_SEC6_no_platform_routes_exist_yet(self, app):
-        """No platform endpoint exists yet; nothing to leak in either direction."""
-        platform_paths = [
-            r.path
-            for r in _flatten(app.routes)
-            if (getattr(r, "path", "") or "").startswith("/api/v1/platform")
-        ]
-        assert platform_paths == []
+    def test_SEC6_the_platform_surface_is_exactly_the_p3_commission_routes(self, app):
+        """P0 §15: P3 adds these four and nothing else."""
+        assert set(platform_scoped_routes(app)) == {
+            ("GET", "/api/v1/platform/commission/summary"),
+            ("GET", "/api/v1/platform/commission/plans"),
+            ("POST", "/api/v1/platform/commission/plans"),
+            ("POST", "/api/v1/platform/commission/settlements"),
+        }
+
+    def test_SEC6_COM7_tenant_token_rejected_on_every_platform_route(
+        self, client, app, tenant_a
+    ):
+        """A-COM-7/8: an owner-admin is refused on every commission route, read
+        included, with a *valid* body so the refusal is authorization and not
+        request validation."""
+        bodies = {
+            "/api/v1/platform/commission/plans": {
+                "operation_id": str(uuid7()),
+                "tenant_id": str(tenant_a.tenant.id),
+                "basis": "RECORDED_VALUE",
+                "rate_bp": 250,
+                "effective_from": "2026-01-01",
+            },
+            "/api/v1/platform/commission/settlements": {
+                "operation_id": str(uuid7()),
+                "tenant_id": str(tenant_a.tenant.id),
+                "period_start": "2026-01-01",
+                "period_end": "2026-01-31",
+                "amount_minor": 1000,
+            },
+        }
+        routes = platform_scoped_routes(app)
+        assert routes, "platform route enumeration returned nothing"
+        for method, path in routes:
+            resp = client.request(
+                method,
+                path,
+                params={"tenant_id": str(tenant_a.tenant.id)},
+                json=bodies.get(path),
+                headers=tenant_a.auth,
+            )
+            assert resp.status_code in (403, 404), f"{method} {path} -> {resp.status_code}"
+            assert resp.json()["error"]["code"] in (
+                "PERMISSION_DENIED",
+                "NOT_FOUND",
+            ), f"{method} {path}"
+
+    def test_SEC6_platform_token_is_accepted_on_the_platform_surface(
+        self, client, platform_token, tenant_a
+    ):
+        """The mirror of the test above: the scope separation cuts both ways."""
+        resp = client.get(
+            "/api/v1/platform/commission/summary",
+            params={"tenant_id": str(tenant_a.tenant.id)},
+            headers={"Authorization": f"Bearer {platform_token}"},
+        )
+        assert resp.status_code == 200, resp.text
 
     def test_unauthenticated_request_is_401(self, client):
         resp = client.get("/api/v1/customers")
@@ -415,6 +482,20 @@ class TestRouteInventory:
         ("POST", "/api/v1/payments/{payment_id}/void"),
     }
 
+    PLATFORM_EXERCISED = {
+        ("GET", "/api/v1/platform/commission/summary"),
+        ("GET", "/api/v1/platform/commission/plans"),
+        ("POST", "/api/v1/platform/commission/plans"),
+        ("POST", "/api/v1/platform/commission/settlements"),
+    }
+
+    def test_platform_route_inventory_is_covered(self, app):
+        """A new platform route cannot escape the COM-7 rejection suite."""
+        missing = set(platform_scoped_routes(app)) - self.PLATFORM_EXERCISED
+        assert missing == set(), (
+            f"new platform route(s) without isolation coverage: {sorted(missing)}"
+        )
+
     def test_route_inventory_is_covered(self, app):
         actual = set(tenant_scoped_routes(app))
         missing = actual - self.EXERCISED
@@ -429,7 +510,9 @@ class TestRouteInventory:
             (method.upper(), path)
             for path, ops in schema["paths"].items()
             for method in ops
-            if path.startswith("/api/v1") and not path.startswith("/api/v1/auth")
+            if path.startswith("/api/v1")
+            and not path.startswith("/api/v1/auth")
+            and not path.startswith("/api/v1/platform")
         }
         assert from_openapi == set(tenant_scoped_routes(app))
 

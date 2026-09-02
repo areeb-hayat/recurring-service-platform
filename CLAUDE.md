@@ -9,13 +9,16 @@ satisfies them.
 
 ## Current phase
 
-P0 (architecture freeze), P1 (backend & data foundation) and P2 (financial engine) are complete —
-see `docs/P1_HANDOVER.md` and `docs/P2_HANDOVER.md`. The backend lives in `backend/`; there is
+P0 (architecture freeze), P1 (backend & data foundation), P2 (financial engine) and P3
+(commercial tracking / commission) are complete — see `docs/P1_HANDOVER.md`,
+`docs/P2_HANDOVER.md` and `docs/P3_HANDOVER.md`. The backend lives in `backend/`; there is
 **no frontend yet**. P2 added billing cycles, posting-cycle resolution, immutable statements,
-manual payments with void, the derived payment status and the §11.1 reporting derivations.
+manual payments with void, the derived payment status and the §11.1 reporting derivations. P3
+added the four commission tables, the four earning bases, snapshotted terms, signed adjustments,
+aggregate settlement and the platform-only commission surface.
 
-Do not skip ahead: no UI, no offline sync endpoint, no reminders, no commission engine, no AI and
-no voice before their package. P1 and P2 deliberately contain no adapter and make no network call.
+Do not skip ahead: no UI, no offline sync endpoint, no reminders, no AI and no voice before their
+package. P1, P2 and P3 deliberately contain no adapter and make no network call.
 
 Run the backend tests with a real PostgreSQL — never SQLite:
 
@@ -83,7 +86,12 @@ composite foreign keys `(tenant_id, id)`, not by application care alone. Every q
 the principal's tenant.
 
 **Platform commission is protected.** Tenant users have no read and no write access to commission
-plans, events, adjustments, or settlements. Only the platform scope does.
+plans, events, adjustments, or settlements. Only the platform scope does. Commission is earned by
+the server inside the transaction that accepts the source business event, never by a client; every
+`commission_event` snapshots the plan terms in force, and a correction, void or reversal appends a
+signed `commission_adjustment` computed with those **original** terms. Settlement is additive and
+allocates to nothing: `earned + adjustments − settled = outstanding`. Do not add a `settlement_id`
+column or a settlement-allocation table.
 
 **AI is never authoritative.** The interpreters may only produce a validated filter object (read)
 or a closed candidate intent (write-suggestion). Neither can write, and the product — including
@@ -106,7 +114,7 @@ ports with separate contracts.
 ```
 app/core       money, ids, time, config, security primitives
 app/<domain>   tenancy identity customers service billing payments
-               reminders commission sync search voice
+               commission reminders sync search voice
 app/ports      CommunicationProvider, SpeechToTextProvider,
                SearchInterpreter, OperationalIntentInterpreter (Protocols)
 app/adapters   comms/ speech/ ai/ — mock + real implementations

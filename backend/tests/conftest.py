@@ -202,9 +202,8 @@ def tenant_b(db, settings, clock) -> TenantFixture:
 
 
 @pytest.fixture
-def platform_token(db, settings, clock) -> str:
-    from app.core.security import encode_access_token
-
+def platform_user(db):
+    """The platform-scope principal. ``tenant_id`` is NULL by construction."""
     user = provision_user(
         db,
         email="platform@platform.test",
@@ -213,6 +212,14 @@ def platform_token(db, settings, clock) -> str:
         tenant=None,
     )
     db.commit()
+    return user
+
+
+@pytest.fixture
+def platform_token(platform_user, settings, clock) -> str:
+    from app.core.security import encode_access_token
+
+    user = platform_user
     return encode_access_token(
         secret=settings.jwt_secret,
         user_id=str(user.id),

@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import IdempotencyKeyReuseError
 from app.sync.models import OperationStatus, SyncOperation
-from app.tenancy.context import TenantContext
+from app.tenancy.context import PlatformContext, TenantContext
 
 __all__ = ["OperationOutcome", "compute_request_hash", "execute_idempotent"]
 
@@ -88,7 +88,7 @@ def _replay(existing: SyncOperation, request_hash: str) -> OperationOutcome:
 
 def execute_idempotent(
     session: Session,
-    ctx: TenantContext,
+    ctx: TenantContext | PlatformContext,
     *,
     operation_id: uuid.UUID,
     op_type: str,
@@ -100,6 +100,11 @@ def execute_idempotent(
     ``perform`` returns ``(result_dict, entity_type, entity_id)`` and must do all
     of its work in the caller's session without committing. This function owns
     the transaction boundary.
+
+    ``ctx`` may be a :class:`~app.tenancy.context.PlatformContext`: a platform
+    command targeting a tenant registers under that tenant's ``(tenant_id,
+    operation_id)`` key, so P3 reuses this register rather than building a second
+    idempotency system beside it.
     """
     request_hash = compute_request_hash(op_type, payload)
 

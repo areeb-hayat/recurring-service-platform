@@ -7,6 +7,7 @@ never from a path, query or body parameter, and rejects platform principals.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated, Iterator
 
 from fastapi import Depends, Header, Request
@@ -19,7 +20,7 @@ from app.core.errors import AuthenticationError, NotFoundError
 from app.core.security import decode_access_token
 from app.identity.capabilities import require
 from app.identity.service import principal_from_claims
-from app.tenancy.context import Principal, TenantContext
+from app.tenancy.context import PlatformContext, Principal, TenantContext
 from app.tenancy.models import Tenant
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "get_clock",
     "get_current_principal",
     "require_tenant_context",
+    "build_platform_context",
     "require_capability",
     "CurrentPrincipal",
     "Db",
@@ -95,6 +97,28 @@ def require_tenant_context(
 
 
 TenantCtx = Annotated[TenantContext, Depends(require_tenant_context)]
+
+
+def build_platform_context(
+    session: Session,
+    clock: Clock,
+    principal: Principal,
+    tenant_id: uuid.UUID,
+) -> PlatformContext:
+    """Build the platform scope for a commission route (P0 §11, COM-7/COM-8).
+
+    Not a plain ``Depends`` because the target tenant arrives in the query string
+    on a read and in the body on a write; the check is identical either way and
+    lives here rather than being repeated in each route.
+
+    A tenant principal never reaches this — the capability dependency already
+    refused it, since no tenant role holds any ``commission:*`` capability — and
+    :meth:`PlatformContext.build` refuses it again if it somehow does.
+    """
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None or tenant.status != "ACTIVE":
+        raise NotFoundError("tenant not found")
+    return PlatformContext.build(principal=principal, tenant=tenant, clock=clock)
 
 
 def require_capability(capability: str):

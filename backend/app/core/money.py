@@ -8,8 +8,12 @@ The frozen financial representation (P0 §5.1, §5.2):
   to be an integer.
 * ``charge_minor = round_half_up(quantity * unit_price_minor)`` — rounded exactly
   once, here, at the daily service record. Nothing downstream re-rounds.
+* ``commission_minor = round_half_up(base_amount_minor * rate_bp / 10000)`` — the
+  same half-up rule at the commission-event level (P0 §5.2, COM-9). It shares
+  :func:`_round_half_up` with the charge rule rather than repeating it, so there
+  is exactly one rounding implementation in the system.
 
-Invariants: FIN-1, FIN-2, FIN-3.
+Invariants: FIN-1, FIN-2, FIN-3, COM-9.
 """
 
 from __future__ import annotations
@@ -19,10 +23,13 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 __all__ = [
     "QUANTITY_SCALE",
     "QUANTITY_MAX",
+    "RATE_BP_SCALE",
     "MoneyError",
     "QuantityError",
     "quantize_quantity",
     "compute_charge_minor",
+    "validate_rate_bp",
+    "apply_rate_bp",
 ]
 
 QUANTITY_SCALE = 3
@@ -34,6 +41,10 @@ QUANTITY_MAX = Decimal("999999999.999")
 # Guards against absurd configuration rather than expressing a business limit.
 # Comfortably inside BIGINT once multiplied by QUANTITY_MAX.
 _UNIT_PRICE_MINOR_MAX = 10**12
+
+# Basis points: 10000 bp = 100%. An integer scale, so a commission rate never
+# needs a decimal and can never be a float (COM-9, P0 §6).
+RATE_BP_SCALE = 10000
 
 
 class MoneyError(ValueError):
@@ -56,6 +67,25 @@ def _reject_float(value: object, error: type[ValueError], field: str) -> None:
             f"{field} must not be a float; pass an int, str or Decimal "
             f"(got float {value!r})"
         )
+
+
+def _round_half_up(value: Decimal) -> int:
+    """The one rounding implementation in the system (P0 §5.2).
+
+    Half-up and symmetric about zero: ``Decimal.quantize(ROUND_HALF_UP)`` rounds
+    away from zero, so ``-0.5`` becomes ``-1`` exactly as ``0.5`` becomes ``1``.
+    That symmetry matters for commission, where a correction produces a negative
+    base and must reverse the same magnitude it earned.
+
+    An explicit high-precision context so the result never depends on ambient
+    decimal settings.
+    """
+    with localcontext() as ctx:
+        ctx.prec = 50
+        rounded = value.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    result = int(rounded)
+    assert isinstance(result, int)  # FIN-1: this boundary returns an int, always.
+    return result
 
 
 def quantize_quantity(value: Decimal | int | str) -> Decimal:
@@ -125,13 +155,49 @@ def compute_charge_minor(quantity: Decimal | int | str, unit_price_minor: int) -
     qty = quantize_quantity(quantity)
     price = validate_unit_price_minor(unit_price_minor)
 
-    # An explicit high-precision context so the result never depends on ambient
-    # decimal settings. 12 digits of quantity x 13 of price stays far inside 50.
+    # 12 digits of quantity x 13 of price stays far inside the 50-digit context.
     with localcontext() as ctx:
         ctx.prec = 50
         product = qty * Decimal(price)
-        charge = product.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    return _round_half_up(product)
 
-    result = int(charge)
-    assert isinstance(result, int)  # FIN-1: the boundary returns an int, always.
-    return result
+
+def validate_rate_bp(value: int) -> int:
+    """COM-9: a commission rate is an integer 0..10000 basis points."""
+    _reject_float(value, MoneyError, "rate_bp")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise MoneyError(
+            f"rate_bp must be an int in basis points (got {type(value).__name__})"
+        )
+    if not 0 <= value <= RATE_BP_SCALE:
+        raise MoneyError(f"rate_bp must be between 0 and {RATE_BP_SCALE} (got {value})")
+    return value
+
+
+def apply_rate_bp(base_amount_minor: int, rate_bp: int) -> int:
+    """``round_half_up(base_amount_minor * rate_bp / 10000)`` (COM-9, P0 §5.2).
+
+    The commission-level use of the *same* rounding rule as the charge — hence
+    the shared :func:`_round_half_up` — expressed in integer basis points so no
+    decimal rate ever exists to be stored as a float.
+
+    ``base_amount_minor`` may be negative: a correction reverses commission on
+    the difference, and the half-up rule is symmetric about zero.
+
+    >>> apply_rate_bp(100000, 250)
+    2500
+    >>> apply_rate_bp(-30000, 250)
+    -750
+    """
+    _reject_float(base_amount_minor, MoneyError, "base_amount_minor")
+    if isinstance(base_amount_minor, bool) or not isinstance(base_amount_minor, int):
+        raise MoneyError(
+            "base_amount_minor must be an int in minor units "
+            f"(got {type(base_amount_minor).__name__})"
+        )
+    rate = validate_rate_bp(rate_bp)
+
+    with localcontext() as ctx:
+        ctx.prec = 50
+        product = Decimal(base_amount_minor) * Decimal(rate) / Decimal(RATE_BP_SCALE)
+    return _round_half_up(product)

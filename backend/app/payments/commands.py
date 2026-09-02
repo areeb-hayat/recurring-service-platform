@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.audit.models import AuditAction, AuditSource
 from app.audit.service import record_tenant_event, snapshot
 from app.billing.ledger import post_payment, post_payment_adjustment
+from app.commission import engine as commission
 from app.core.clock import validate_business_date
 from app.core.db import next_row_version
 from app.core.errors import NotFoundError, ValidationFailed
@@ -197,6 +198,10 @@ def record_payment(
 
     post_payment(session, ctx, payment)
 
+    # COM-2: a COLLECTED_VALUE plan earns here, in this transaction. Any other
+    # basis earns nothing from a payment.
+    commission.on_payment_recorded(session, ctx, payment)
+
     record_tenant_event(
         session,
         ctx,
@@ -264,6 +269,11 @@ def void_payment(
         occurred_on=payment.received_on,
         source_id=payment.id,
     )
+
+    # Collections fall, so collection commission reverses (P0 §11). Commission
+    # earned on service value is untouched: it never had an event for this
+    # payment, which is the same origin rule that keeps FIN-14 and FIN-16 apart.
+    commission.on_payment_voided(session, ctx, payment, reason=reason)
 
     record_tenant_event(
         session,

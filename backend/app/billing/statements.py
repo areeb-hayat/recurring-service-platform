@@ -34,6 +34,7 @@ from app.billing.models import (
     SourceType,
     Statement,
 )
+from app.commission import engine as commission
 from app.core.db import next_row_version
 from app.core.errors import NotFoundError, ValidationFailed
 from app.service.models import DailyServiceRecord
@@ -287,6 +288,11 @@ def issue_statements_for_cycle(
         session.add(statement)
         issued.append(statement)
     session.flush()
+
+    # FIN-15 is what a BILLED_VALUE plan earns on, so commission is created here,
+    # at issue, in the close transaction — not when the service was recorded.
+    for statement in issued:
+        commission.on_statement_issued(session, ctx, statement, cycle)
     return issued
 
 

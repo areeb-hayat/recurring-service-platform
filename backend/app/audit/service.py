@@ -63,6 +63,22 @@ AUDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
         "source",
     ),
     "billing_cycle": ("period_start", "period_end", "status"),
+    "commission_plan": (
+        "basis",
+        "rate_bp",
+        "fixed_amount_minor",
+        "currency",
+        "effective_from",
+        "effective_to",
+    ),
+    "commission_settlement": (
+        "period_start",
+        "period_end",
+        "amount_minor",
+        "settled_on",
+        "reference",
+        "note",
+    ),
     "app_user": ("email", "role", "status"),
 }
 

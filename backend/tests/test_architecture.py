@@ -23,14 +23,32 @@ DOMAIN_PACKAGES = {
     "service",
     "billing",
     "payments",
+    "commission",
     "audit",
     "sync",
     "core",
 }
 # Tables that must never be updated or deleted (FIN-8, FIN-12, AUD-7).
 # A statement joins the list in P2: it is immutable from the instant it is issued.
-APPEND_ONLY_MODELS = {"LedgerEntry", "AuditEvent", "Statement"}
-APPEND_ONLY_TABLES = {"ledger_entry", "audit_event", "statement"}
+# P3 adds the three commission history tables (COM-3, COM-6, AUD-1). Note that
+# ``commission_plan`` is deliberately absent: closing an open-ended plan's
+# ``effective_to`` is its one permitted lifecycle transition.
+APPEND_ONLY_MODELS = {
+    "LedgerEntry",
+    "AuditEvent",
+    "Statement",
+    "CommissionEvent",
+    "CommissionAdjustment",
+    "CommissionSettlement",
+}
+APPEND_ONLY_TABLES = {
+    "ledger_entry",
+    "audit_event",
+    "statement",
+    "commission_event",
+    "commission_adjustment",
+    "commission_settlement",
+}
 
 
 def _imports(path: pathlib.Path) -> list[str]:
@@ -133,8 +151,13 @@ class TestNoFutureScope:
         "SearchInterpreter",
         "CommunicationProvider",
         "payment_attempt",
-        "CommissionPlan",
-        "CommissionEvent",
+        # P3 builds the commission family, so CommissionPlan and CommissionEvent
+        # left this list. What replaced them is the scope P3 must *not* create:
+        # a settlement allocation, or a settlement reference on earning history
+        # (COM-11).
+        "CommissionSettlementAllocation",
+        "settlement_allocation",
+        "settlement_id",
     ]
 
     @pytest.mark.parametrize("symbol", FORBIDDEN_SYMBOLS)
@@ -154,6 +177,18 @@ class TestNoFutureScope:
                 if root in {"httpx", "requests", "aiohttp", "urllib3", "socket"}:
                     offenders.append((module_name(path), imported))
         assert offenders == [], f"HTTP client imported by application code: {offenders}"
+
+    def test_no_settlement_reference_on_earning_models(self):
+        """COM-11: V1 settles in aggregate; nothing points an event at a settlement."""
+        import app.commission.models as commission_models
+
+        for model in (
+            commission_models.CommissionEvent,
+            commission_models.CommissionAdjustment,
+        ):
+            columns = set(model.__table__.columns.keys())
+            assert "settlement_id" not in columns, model.__name__
+            assert not any(c.startswith("settle") for c in columns), model.__name__
 
     def test_no_voice_or_audio_module(self):
         for forbidden in ("voice", "speech", "audio", "transcript"):
@@ -285,6 +320,10 @@ class TestTenantScopingIsStructural:
         "app/billing/statements.py",
         "app/billing/reporting.py",
         "app/payments/commands.py",
+        "app/commission/plans.py",
+        "app/commission/engine.py",
+        "app/commission/settlements.py",
+        "app/commission/reporting.py",
     ]
 
     @pytest.mark.parametrize("relative", QUERY_MODULES)
@@ -301,6 +340,10 @@ class TestTenantScopingIsStructural:
                 "serialize_cycle",
                 "serialize_statement",
                 "serialize_payment",
+                "serialize_plan",
+                "serialize_settlement",
+                "serialize_position",
+                "commission_minor_for",
             }:
                 continue
             args = [a.arg for a in node.args.args] + [

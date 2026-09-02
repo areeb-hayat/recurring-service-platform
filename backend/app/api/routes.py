@@ -16,8 +16,10 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
+    CurrentPrincipal,
     Db,
     TenantCtx,
+    build_platform_context,
     get_app_settings,
     get_clock,
     require_capability,
@@ -25,10 +27,12 @@ from app.api.deps import (
 from app.api.schemas import (
     CloseCycleRequest,
     CorrectServiceRequest,
+    CreateCommissionPlanRequest,
     CreateCustomerRequest,
     LoginRequest,
     LogoutRequest,
     OperationResponse,
+    RecordCommissionSettlementRequest,
     RecordPaymentRequest,
     RecordServiceRequest,
     RefreshRequest,
@@ -45,6 +49,14 @@ from app.billing.statements import (
     load_statement,
     serialize_statement,
 )
+from app.commission.plans import (
+    CreatePlanInput,
+    create_plan,
+    list_plans,
+    serialize_plan,
+)
+from app.commission.reporting import commission_position, serialize_position
+from app.commission.settlements import RecordSettlementInput, record_settlement
 from app.core.clock import Clock
 from app.core.config import Settings
 from app.customers.commands import (
@@ -82,6 +94,11 @@ service_router = APIRouter(prefix="/api/v1/service", tags=["service"])
 billing_router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 statement_router = APIRouter(prefix="/api/v1/statements", tags=["billing"])
 payment_router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
+# P0 §15: the platform surface is a separate prefix, and every route on it is
+# gated by a commission capability no tenant role holds (SEC-5, COM-7).
+platform_commission_router = APIRouter(
+    prefix="/api/v1/platform/commission", tags=["platform-commission"]
+)
 
 _UNSET = UpdateCustomerInput.__dataclass_fields__["name"].default
 
@@ -458,6 +475,119 @@ def void_payment_route(
             ctx,
             payment_id,
             VoidPaymentInput(reason=body.reason),
+            operation_id=body.operation_id,
+        ),
+    )
+    return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+# --- platform commission (P0 §11, §15) ---------------------------------------
+#
+# COM-7/COM-8: every route here requires a ``commission:*`` capability, and the
+# tenant capability set contains none of them — so an owner-admin token is 403 on
+# all of them, read included, without any per-route cleverness.
+
+
+@platform_commission_router.get("/summary")
+def commission_summary_route(
+    session: Db,
+    principal: CurrentPrincipal,
+    clock: Annotated[Clock, Depends(get_clock)],
+    _: Annotated[object, Depends(require_capability("commission:read"))],
+    tenant_id: uuid.UUID = Query(..., description="the tenant to report on"),
+) -> dict:
+    """P0 §11.1 group C: earned + adjustments − settled = outstanding.
+
+    The tenant is named explicitly by the platform caller; there is no "my
+    tenant" here, because a platform principal has none.
+    """
+    ctx = build_platform_context(session, clock, principal, tenant_id)
+    return serialize_position(commission_position(session, ctx), ctx)
+
+
+@platform_commission_router.get("/plans")
+def list_commission_plans_route(
+    session: Db,
+    principal: CurrentPrincipal,
+    clock: Annotated[Clock, Depends(get_clock)],
+    _: Annotated[object, Depends(require_capability("commission:read"))],
+    tenant_id: uuid.UUID = Query(..., description="the tenant whose plans to list"),
+) -> dict:
+    ctx = build_platform_context(session, clock, principal, tenant_id)
+    return {"items": [serialize_plan(p) for p in list_plans(session, ctx)]}
+
+
+@platform_commission_router.post("/plans", response_model=OperationResponse, status_code=201)
+def create_commission_plan_route(
+    body: CreateCommissionPlanRequest,
+    session: Db,
+    principal: CurrentPrincipal,
+    clock: Annotated[Clock, Depends(get_clock)],
+    _: Annotated[object, Depends(require_capability("commission:adjust"))],
+) -> OperationResponse:
+    """Create a commission plan (COM-1, COM-8).
+
+    Idempotent through the same register every other write uses: the register key
+    is ``(tenant_id, operation_id)`` and the target tenant is the one named in the
+    body, so a retried plan creation cannot produce two overlapping plans.
+    """
+    ctx = build_platform_context(session, clock, principal, body.tenant_id)
+    outcome = execute_idempotent(
+        session,
+        ctx,
+        operation_id=body.operation_id,
+        op_type="commission.plan.create",
+        payload=body.model_dump(mode="json", exclude={"operation_id"}),
+        perform=lambda: create_plan(
+            session,
+            ctx,
+            CreatePlanInput(
+                basis=body.basis,
+                rate_bp=body.rate_bp,
+                fixed_amount_minor=body.fixed_amount_minor,
+                currency=body.currency,
+                effective_from=body.effective_from,
+                effective_to=body.effective_to,
+            ),
+            operation_id=body.operation_id,
+        ),
+    )
+    return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+@platform_commission_router.post(
+    "/settlements", response_model=OperationResponse, status_code=201
+)
+def record_commission_settlement_route(
+    body: RecordCommissionSettlementRequest,
+    session: Db,
+    principal: CurrentPrincipal,
+    clock: Annotated[Clock, Depends(get_clock)],
+    _: Annotated[object, Depends(require_capability("commission:settle"))],
+) -> OperationResponse:
+    """Record money settled (COM-6, COM-8).
+
+    Strictly additive: nothing is stamped on an earning event, and a replay
+    returns the same settlement rather than recording it twice.
+    """
+    ctx = build_platform_context(session, clock, principal, body.tenant_id)
+    outcome = execute_idempotent(
+        session,
+        ctx,
+        operation_id=body.operation_id,
+        op_type="commission.settlement.record",
+        payload=body.model_dump(mode="json", exclude={"operation_id"}),
+        perform=lambda: record_settlement(
+            session,
+            ctx,
+            RecordSettlementInput(
+                period_start=body.period_start,
+                period_end=body.period_end,
+                amount_minor=body.amount_minor,
+                settled_on=body.settled_on,
+                reference=body.reference,
+                note=body.note,
+            ),
             operation_id=body.operation_id,
         ),
     )
