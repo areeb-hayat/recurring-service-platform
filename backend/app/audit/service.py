@@ -51,6 +51,18 @@ AUDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
         "source",
         "input_method",
     ),
+    "payment": (
+        "customer_id",
+        "amount_minor",
+        "method",
+        "received_on",
+        "reference",
+        "note",
+        "status",
+        "voided_reason",
+        "source",
+    ),
+    "billing_cycle": ("period_start", "period_end", "status"),
     "app_user": ("email", "role", "status"),
 }
 

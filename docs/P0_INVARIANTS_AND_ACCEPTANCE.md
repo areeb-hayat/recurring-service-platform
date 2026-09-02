@@ -24,7 +24,7 @@ two principal kinds from the architecture freeze.
 | FIN-6 | Every accepted daily service record snapshots the `unit_price_minor` and `unit_label` used. Changing a customer's current price never alters any existing record, charge, ledger entry, or statement. |
 | FIN-7 | A `SKIP` records a real row with `quantity = 0` and `charge_minor = 0`, and creates **no** ledger entry. |
 | FIN-8 | A statement is immutable once issued. Its `closing_balance_minor` equals `opening + charges + service_adjustments − payments + payment_reversals` for entries posted to its cycle, and its opening balance equals the previous statement's closing balance. Adjustments are stored split by origin, never as one mixed figure. |
-| FIN-9 | A correction or void affecting a closed cycle keeps its original `occurred_on` but posts to the currently `OPEN` cycle. No issued statement is ever rewritten. |
+| FIN-9 | A correction or void affecting a closed cycle keeps its original `occurred_on` but posts to the currently `OPEN` cycle. No issued statement is ever rewritten. `period_end` is inclusive, so a cycle may not be closed until `business_date > period_end`: every cycle covers a full configured period, and business dated on `period_end` stays eligible for it. An `OPEN` cycle whose period has already ended accepts no new entry — the write fails closed asking for the rollover rather than filing new business under a finished period — while backdating into an earlier, closed period is still accepted and posts to the current open cycle. *(Both sentences added in P2: closing early silently shortened a period and moved its remaining days into the next bill, and an expired-but-open cycle silently swallowed the next period's business. Neither was a client decision.)* |
 | FIN-10 | Payments support full, partial, and none. Any positive amount is accepted, including an overpayment, which yields a negative (credit) outstanding rather than an error. |
 | FIN-11 | Customer status is derived from FIN-4 on every read; it is never a stored, cached, or client-computed field. |
 | FIN-12 | `ledger_entry` is append-only. No code path issues `UPDATE` or `DELETE` against it. |
@@ -55,7 +55,10 @@ two principal kinds from the architecture freeze.
   `closing == opening + charges + service_adjustments − payments + payment_reversals`.
 - **A-FIN-9** Close January, correct a 5 January record in February, then assert the January
   statement is unchanged in every field from its issued form and the adjustment appears on the February
-  statement with `occurred_on = 5 January`.
+  statement with `occurred_on = 5 January`. Assert also that attempting to close January on or
+  before 31 January is refused, changes nothing, and issues no statement; that a service and a
+  payment dated 31 January still post to the January cycle; and that with January still `OPEN` on
+  1 February, a new 1 February service or payment fails closed rather than posting into January.
 - **A-FIN-10** Bill 1000, pay 400 → `PARTIALLY_PAID`, outstanding 600. Pay 600 more → `PAID`,
   outstanding 0. Pay 100 more → outstanding −100, status `PAID`, no error.
 - **A-FIN-13** With no payment-provider configuration of any kind present in the application,
@@ -127,6 +130,7 @@ two principal kinds from the architecture freeze.
 | SYN-13 | The `sync_operation` register is retained indefinitely in V1 and never pruned. An `operation_id` once accepted stays replay-safe for the life of the system; no retention horizon exists that could become a duplication horizon. |
 | SYN-14 | An `operation_id` is bound to the request that created it. Replaying `(tenant_id, operation_id)` with a **different** request payload is refused with an explicit idempotency-key-reuse conflict: the earlier result is never returned as though the requests matched, and the new request is never applied. Fails closed. *(Added in P1 as a conservative implementation clarification — SYN-2 defines the identical-replay case but left differing-payload reuse unspecified.)* |
 | SYN-15 | The register claims `(tenant_id, operation_id)` **before** the effect runs, so the register's unique index — not whichever business constraint the effect happens to touch — is the serialization point for concurrent replays. Otherwise identical concurrent envelopes surface as `CONFLICT` on a business constraint instead of `DUPLICATE`. *(Added in P1.)* |
+| SYN-16 | Every record that appears in the client's authoritative offline snapshot (§7.1) carries its own `row_version` from the shared sequence — `tenant`, `customer`, `daily_service_record`, `ledger_entry`, `payment`, `statement` — and it advances on every permitted mutation of that record, including `RECORDED -> VOIDED` on a payment. A related row's version is never a substitute for the record's own. Tables that are not client sync entities do not carry the column. *(Added in P2: §6 defined `payment` and `statement` without `row_version` while §7.1 and §7.4 required them to be pageable — a genuine internal inconsistency, not a design change.)* |
 
 ### Acceptance — SYN
 
@@ -160,6 +164,11 @@ two principal kinds from the architecture freeze.
 - **A-SYN-15** Fire five concurrent identical envelopes that all target the same business slot
   (same customer and service date). Exactly one is `APPLIED`, four are `DUPLICATE`, and none
   surfaces as `CONFLICT` — the register serializes them, not the daily-record index.
+- **A-SYN-16** Assert every snapshot-bearing table has a `row_version` column defaulting from the
+  shared sequence, and that `billing_cycle` does not. Record a payment, record a later one, then
+  void the first: each draws a distinct value, the later payment's exceeds the earlier one's, the
+  void advances that payment's own version, and the compensating ledger entry takes a later value
+  still. Issue statements in three successive cycles and assert their versions strictly increase.
 
 ---
 

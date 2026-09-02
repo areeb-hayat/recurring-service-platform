@@ -9,6 +9,7 @@ route appears that the explicit cases do not exercise.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -23,11 +24,28 @@ pytestmark = pytest.mark.postgres
 PRICE = 25000
 
 
+def _flatten(routes):
+    """Yield leaf routes, descending through included routers.
+
+    FastAPI >= 0.141 no longer copies an included router's routes onto
+    ``app.routes``; it stores a ``_IncludedRouter`` wrapper holding the original
+    router. Walking only the top level therefore returns *nothing* for a mounted
+    router, which would make every enumeration-driven guard below pass vacuously
+    — the failure mode this helper exists to prevent.
+    """
+    for route in routes:
+        nested = getattr(route, "original_router", None) or getattr(route, "router", None)
+        if nested is not None and getattr(nested, "routes", None):
+            yield from _flatten(nested.routes)
+        else:
+            yield route
+
+
 def tenant_scoped_routes(app) -> list[tuple[str, str]]:
     """Every non-auth, non-meta API route, taken from the app's own route table."""
     out: list[tuple[str, str]] = []
-    for route in app.routes:
-        path = getattr(route, "path", "")
+    for route in _flatten(app.routes):
+        path = getattr(route, "path", "") or ""
         methods = getattr(route, "methods", None)
         if not methods or not path.startswith("/api/v1"):
             continue
@@ -61,6 +79,19 @@ def a_record(client, tenant_a, a_customer):
         "quantity": "2",
     }
     resp = client.post("/api/v1/service/records", json=body, headers=tenant_a.auth)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["entity"]
+
+
+@pytest.fixture
+def a_payment(client, tenant_a, a_record):
+    body = {
+        "operation_id": str(uuid7()),
+        "customer_id": a_record["customer_id"],
+        "amount_minor": 10000,
+        "method": "CASH",
+    }
+    resp = client.post("/api/v1/payments", json=body, headers=tenant_a.auth)
     assert resp.status_code == 201, resp.text
     return resp.json()["entity"]
 
@@ -119,6 +150,77 @@ class TestSEC4CrossTenantIsReported404:
         )
         assert resp.status_code == 404
 
+    def test_SEC4_cannot_record_payment_against_other_tenants_customer(
+        self, client, tenant_a, tenant_b, a_customer
+    ):
+        resp = client.post(
+            "/api/v1/payments",
+            json={
+                "operation_id": str(uuid7()),
+                "customer_id": a_customer["id"],
+                "amount_minor": 1000,
+                "method": "CASH",
+            },
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 404
+
+    def test_SEC4_cannot_void_other_tenants_payment(
+        self, client, tenant_a, tenant_b, a_payment
+    ):
+        resp = client.post(
+            f"/api/v1/payments/{a_payment['id']}/void",
+            json={"operation_id": str(uuid7()), "reason": "hijack"},
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 404
+
+    def test_SEC4_cannot_close_other_tenants_cycle(
+        self, client, tenant_a, tenant_b, a_payment
+    ):
+        cycle = client.get("/api/v1/billing/cycles", headers=tenant_a.auth).json()["items"][0]
+        resp = client.post(
+            f"/api/v1/billing/cycles/{cycle['id']}/close",
+            json={"operation_id": str(uuid7())},
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 404
+
+    def test_SEC4_cannot_read_other_tenants_statement(
+        self, client, clock, settings, tenant_a, tenant_b, a_payment
+    ):
+        from tests._ops import auth_at
+
+        cycle = client.get("/api/v1/billing/cycles", headers=tenant_a.auth).json()["items"][0]
+        # period_end is inclusive, so a cycle only closes the day after it.
+        boundary = (
+            datetime.fromisoformat(cycle["period_end"]) + timedelta(days=1)
+        ).replace(hour=12, tzinfo=timezone.utc)
+        clock.set(boundary)
+        auth_a = auth_at(tenant_a, settings, boundary)
+        assert (
+            client.post(
+                f"/api/v1/billing/cycles/{cycle['id']}/close",
+                json={"operation_id": str(uuid7())},
+                headers=auth_a,
+            ).status_code
+            == 200
+        )
+        statements = client.get(
+            f"/api/v1/customers/{a_payment['customer_id']}/statements",
+            headers=auth_a,
+        ).json()["items"]
+        assert len(statements) == 1
+        resp = client.get(
+            f"/api/v1/statements/{statements[0]['id']}",
+            headers=auth_at(tenant_b, settings, boundary),
+        )
+        assert resp.status_code == 404
+
+    def test_SEC4_cycle_listing_is_scoped(self, client, tenant_a, tenant_b, a_record):
+        assert client.get("/api/v1/billing/cycles", headers=tenant_a.auth).json()["items"]
+        assert client.get("/api/v1/billing/cycles", headers=tenant_b.auth).json()["items"] == []
+
     def test_SEC4_listing_never_leaks_other_tenants_rows(
         self, client, tenant_a, tenant_b, a_customer
     ):
@@ -155,6 +257,9 @@ class TestSEC6ScopeSeparation:
                 path.replace("{customer_id}", a_customer["id"])
                 .replace("{record_id}", a_record["id"])
                 .replace("{service_date}", a_record["service_date"])
+                .replace("{cycle_id}", str(uuid7()))
+                .replace("{statement_id}", str(uuid7()))
+                .replace("{payment_id}", str(uuid7()))
             )
             resp = client.request(method, url, json={"operation_id": str(uuid7())}, headers=headers)
             assert resp.status_code in (403, 422), f"{method} {url} -> {resp.status_code}"
@@ -162,9 +267,11 @@ class TestSEC6ScopeSeparation:
                 assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
 
     def test_SEC6_no_platform_routes_exist_yet(self, app):
-        """P1 implements no platform endpoints; nothing to leak in either direction."""
+        """No platform endpoint exists yet; nothing to leak in either direction."""
         platform_paths = [
-            r.path for r in app.routes if getattr(r, "path", "").startswith("/api/v1/platform")
+            r.path
+            for r in _flatten(app.routes)
+            if (getattr(r, "path", "") or "").startswith("/api/v1/platform")
         ]
         assert platform_paths == []
 
@@ -201,6 +308,32 @@ class TestSEC2DatabaseLevelIsolation:
                 },
             )
         assert "fk_daily_service_record_tenant_id_customer_id" in str(exc.value)
+        db.rollback()
+
+    def test_SEC2_direct_sql_cross_tenant_payment_is_rejected(
+        self, db, tenant_a, tenant_b, customer_factory
+    ):
+        """PAY-4 at the database level, bypassing the application entirely."""
+        customer_a = customer_factory(tenant_a.ctx, code="XP", price_minor=PRICE)
+        with pytest.raises(Exception) as exc:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO payment
+                      (id, tenant_id, customer_id, amount_minor, method, received_on,
+                       status, operation_id, recorded_by_user_id, source, recorded_at)
+                    VALUES (gen_random_uuid(), :tenant_b, :customer_a, 500, 'CASH',
+                            CURRENT_DATE, 'RECORDED', gen_random_uuid(), :user_b,
+                            'ONLINE', now())
+                    """
+                ),
+                {
+                    "tenant_b": str(tenant_b.ctx.tenant_id),
+                    "customer_a": str(customer_a.id),
+                    "user_b": str(tenant_b.owner.id),
+                },
+            )
+        assert "fk_payment_tenant_id_customer_id" in str(exc.value)
         db.rollback()
 
     def test_SEC2_direct_sql_cross_tenant_ledger_entry_is_rejected(
@@ -274,6 +407,12 @@ class TestRouteInventory:
         ("POST", "/api/v1/service/records/{record_id}/correct"),
         ("POST", "/api/v1/service/records/{record_id}/void"),
         ("GET", "/api/v1/service/day/{service_date}"),
+        ("GET", "/api/v1/customers/{customer_id}/statements"),
+        ("GET", "/api/v1/billing/cycles"),
+        ("POST", "/api/v1/billing/cycles/{cycle_id}/close"),
+        ("GET", "/api/v1/statements/{statement_id}"),
+        ("POST", "/api/v1/payments"),
+        ("POST", "/api/v1/payments/{payment_id}/void"),
     }
 
     def test_route_inventory_is_covered(self, app):
@@ -294,11 +433,21 @@ class TestRouteInventory:
         }
         assert from_openapi == set(tenant_scoped_routes(app))
 
+    def test_route_enumeration_is_not_vacuous(self, app):
+        """The guard above is only meaningful if it sees the routes at all.
+
+        A framework change that hid mounted routes would silently turn every
+        enumeration test in this file green while covering nothing.
+        """
+        found = tenant_scoped_routes(app)
+        assert found, "route enumeration returned nothing — the SEC-3/4 guards are vacuous"
+        assert set(found) == self.EXERCISED
+
     def test_no_delete_route_exists_anywhere(self, app):
         """AUD-1: no hard-delete path for any business entity."""
         deletes = [
-            (m, r.path)
-            for r in app.routes
+            (m, getattr(r, "path", None))
+            for r in _flatten(app.routes)
             for m in (getattr(r, "methods", None) or set())
             if m == "DELETE"
         ]

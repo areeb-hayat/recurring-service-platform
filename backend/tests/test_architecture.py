@@ -22,13 +22,15 @@ DOMAIN_PACKAGES = {
     "customers",
     "service",
     "billing",
+    "payments",
     "audit",
     "sync",
     "core",
 }
-# Tables that must never be updated or deleted (FIN-12, AUD-7).
-APPEND_ONLY_MODELS = {"LedgerEntry", "AuditEvent"}
-APPEND_ONLY_TABLES = {"ledger_entry", "audit_event"}
+# Tables that must never be updated or deleted (FIN-8, FIN-12, AUD-7).
+# A statement joins the list in P2: it is immutable from the instant it is issued.
+APPEND_ONLY_MODELS = {"LedgerEntry", "AuditEvent", "Statement"}
+APPEND_ONLY_TABLES = {"ledger_entry", "audit_event", "statement"}
 
 
 def _imports(path: pathlib.Path) -> list[str]:
@@ -110,12 +112,18 @@ class TestASLOT6VendorBoundary:
         assert violations == [], f"vendor identifiers in domain code: {violations}"
 
     def test_no_adapter_package_exists_yet(self):
-        """P1 implements no adapter; speculative adapter code would be scope creep."""
+        """No adapter is implemented yet; speculative adapter code is scope creep."""
         assert not (APP_ROOT / "adapters").exists()
 
 
 class TestNoFutureScope:
-    """P1 must not contain later-package or removed-scope implementation."""
+    """No later-package or removed-scope implementation.
+
+    ``BillingCycle`` left this list in P2, which builds it. Everything still here
+    belongs to a later package or to scope that was removed for good: the payment
+    provider family in particular must stay absent, because V1 payments are manual
+    (PAY-1) and A-PAY-1 is precisely this assertion.
+    """
 
     FORBIDDEN_SYMBOLS = [
         "PaymentProvider",
@@ -125,7 +133,6 @@ class TestNoFutureScope:
         "SearchInterpreter",
         "CommunicationProvider",
         "payment_attempt",
-        "BillingCycle",
         "CommissionPlan",
         "CommissionEvent",
     ]
@@ -136,10 +143,10 @@ class TestNoFutureScope:
         for path in python_files():
             if symbol in code_only(path):
                 offenders.append(module_name(path))
-        assert offenders == [], f"{symbol} implemented in P1: {offenders}"
+        assert offenders == [], f"{symbol} implemented out of package: {offenders}"
 
     def test_no_http_client_is_imported(self):
-        """P1 makes no outbound network call of any kind."""
+        """Neither P1 nor P2 makes an outbound network call of any kind."""
         offenders = []
         for path in python_files():
             for imported in _imports(path):
@@ -150,7 +157,7 @@ class TestNoFutureScope:
 
     def test_no_voice_or_audio_module(self):
         for forbidden in ("voice", "speech", "audio", "transcript"):
-            assert not (APP_ROOT / forbidden).exists(), f"app/{forbidden} is out of P1 scope"
+            assert not (APP_ROOT / forbidden).exists(), f"app/{forbidden} is out of scope"
 
 
 class TestAppendOnlyEnforcement:
@@ -189,6 +196,20 @@ class TestAppendOnlyEnforcement:
 
         public = {n for n in dir(ledger) if not n.startswith("_")}
         for banned in ("update_entry", "delete_entry", "remove_entry", "void_entry"):
+            assert banned not in public
+
+    def test_statement_module_exposes_no_mutation_helper(self):
+        """FIN-8: issue and read. There is no amend, reissue or recalculate."""
+        import app.billing.statements as statements
+
+        public = {n for n in dir(statements) if not n.startswith("_")}
+        for banned in (
+            "update_statement",
+            "delete_statement",
+            "reissue_statement",
+            "recalculate_statement",
+            "amend_statement",
+        ):
             assert banned not in public
 
     def test_audit_module_exposes_no_mutation_helper(self):
@@ -260,6 +281,10 @@ class TestTenantScopingIsStructural:
         "app/customers/commands.py",
         "app/service/commands.py",
         "app/billing/ledger.py",
+        "app/billing/cycles.py",
+        "app/billing/statements.py",
+        "app/billing/reporting.py",
+        "app/payments/commands.py",
     ]
 
     @pytest.mark.parametrize("relative", QUERY_MODULES)
@@ -270,7 +295,13 @@ class TestTenantScopingIsStructural:
         for node in tree.body:
             if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
                 continue
-            if node.name in {"serialize_customer", "serialize_record"}:
+            if node.name in {
+                "serialize_customer",
+                "serialize_record",
+                "serialize_cycle",
+                "serialize_statement",
+                "serialize_payment",
+            }:
                 continue
             args = [a.arg for a in node.args.args] + [
                 a.arg for a in node.args.kwonlyargs

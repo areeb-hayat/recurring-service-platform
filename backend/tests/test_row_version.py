@@ -15,6 +15,7 @@ Two properties must hold, and neither is proven by the migration alone:
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
 import pytest
@@ -265,3 +266,200 @@ class TestSequenceIsGlobal:
             db.execute(text("SELECT row_version FROM ledger_entry")).scalars()
         )
         assert versions and all(v > 0 for v in versions)
+
+
+class TestP2AuthoritativeRecordsAreVersioned:
+    """P0 §7.1 puts payment history and statements in the client's authoritative
+    offline snapshot, and §7.4 pages that snapshot on ``row_version > since``.
+
+    Both therefore carry their own value from the shared sequence. A ledger
+    row_version is **not** a substitute: the ledger entry a payment posts is a
+    different record, and a client pulling payment history cannot page on it.
+    """
+
+    def test_a_payment_is_versioned_on_creation(self, db, tenant_a, customer_factory):
+        from tests._ops import do_pay
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        before = _sequence_value(db)
+        outcome = do_pay(db, tenant_a.ctx, customer, 5000)
+        payment = _payment(db, outcome.result["id"])
+        assert payment.row_version > before
+        # The client reads it from the API, not only from the row.
+        assert outcome.result["row_version"] == payment.row_version
+
+    def test_a_later_payment_takes_a_higher_version(
+        self, db, tenant_a, customer_factory
+    ):
+        from tests._ops import do_pay
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        first = _payment(db, do_pay(db, tenant_a.ctx, customer, 100).result["id"])
+        second = _payment(db, do_pay(db, tenant_a.ctx, customer, 200).result["id"])
+        assert second.row_version > first.row_version
+
+    def test_voiding_advances_that_payments_version(
+        self, db, tenant_a, customer_factory
+    ):
+        """The one permitted mutation must be visible on the next delta."""
+        from tests._ops import do_pay, do_void_payment
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        outcome = do_pay(db, tenant_a.ctx, customer, 5000)
+        payment = _payment(db, outcome.result["id"])
+        at_creation = payment.row_version
+
+        voided = do_void_payment(db, tenant_a.ctx, outcome.result["id"], reason="bounced")
+        db.expire_all()
+        payment = _payment(db, outcome.result["id"])
+        assert payment.row_version > at_creation
+        assert voided.result["row_version"] == payment.row_version
+
+    def test_the_compensating_entry_takes_its_own_later_value(
+        self, db, tenant_a, customer_factory
+    ):
+        """The same ordering rule P1 fixed for corrections: the row whose state is
+        ending is versioned first, so the entry explaining it always sorts later."""
+        from app.billing.models import EntryKind, LedgerEntry
+        from tests._ops import do_pay, do_void_payment
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        outcome = do_pay(db, tenant_a.ctx, customer, 5000)
+        do_void_payment(db, tenant_a.ctx, outcome.result["id"], reason="bounced")
+        db.expire_all()
+
+        payment = _payment(db, outcome.result["id"])
+        adjustment = db.execute(
+            select(LedgerEntry).where(
+                LedgerEntry.entry_kind == EntryKind.ADJUSTMENT,
+                LedgerEntry.source_id == payment.id,
+            )
+        ).scalar_one()
+        assert adjustment.row_version > payment.row_version
+
+    def test_an_issued_statement_is_versioned(self, db, tenant_a, customer_factory):
+        from decimal import Decimal as _Decimal
+
+        from app.billing.cycles import open_cycle
+        from app.billing.models import Statement
+        from tests._ops import close_after_period_end, do_record
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        do_record(db, tenant_a.ctx, customer, quantity=_Decimal("2"))
+        before = _sequence_value(db)
+        close_after_period_end(db, tenant_a, open_cycle(db, tenant_a.ctx))
+
+        statement = db.execute(select(Statement)).scalars().one()
+        assert statement.row_version > before
+
+    def test_later_issued_statements_advance_the_shared_sequence(
+        self, db, tenant_a, customer_factory
+    ):
+        from datetime import date as _date, datetime as _datetime, timezone as _tz
+        from decimal import Decimal as _Decimal
+
+        from app.billing.cycles import open_cycle
+        from app.billing.models import Statement
+        from tests._ops import close_after_period_end, ctx_at, do_record
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        for month in (1, 2, 3):
+            ctx = ctx_at(tenant_a, _datetime(2026, month, 10, 7, tzinfo=_tz.utc))
+            do_record(
+                db, ctx, customer, quantity=_Decimal("1"), service_date=_date(2026, month, 5)
+            )
+            close_after_period_end(db, tenant_a, open_cycle(db, ctx))
+
+        versions = [
+            s.row_version
+            for s in db.execute(select(Statement).order_by(Statement.issued_at))
+            .scalars()
+            .all()
+        ]
+        assert len(versions) == 3
+        assert versions == sorted(versions)
+        assert len(set(versions)) == 3
+
+    def test_a_statements_version_never_changes_because_the_row_cannot(
+        self, db, tenant_a, customer_factory
+    ):
+        """FIN-8 is unaffected: the value is drawn once, at issue, and the
+        database still refuses any UPDATE."""
+        from decimal import Decimal as _Decimal
+
+        from app.billing.cycles import open_cycle
+        from app.billing.models import Statement
+        from tests._ops import close_after_period_end, do_record
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        do_record(db, tenant_a.ctx, customer, quantity=_Decimal("1"))
+        close_after_period_end(db, tenant_a, open_cycle(db, tenant_a.ctx))
+        statement = db.execute(select(Statement)).scalars().one()
+
+        with pytest.raises(Exception) as exc:
+            db.execute(
+                text("UPDATE statement SET row_version = row_version + 1 WHERE id = :i"),
+                {"i": str(statement.id)},
+            )
+        assert "immutable" in str(exc.value)
+        db.rollback()
+
+    def test_the_cursor_stays_monotonic_across_every_versioned_table(
+        self, db, tenant_a, customer_factory
+    ):
+        """SYN-10: one shared sequence, so a P5 cursor of N can ask for everything
+        greater than N across tables and miss nothing."""
+        from decimal import Decimal as _Decimal
+
+        from app.billing.cycles import open_cycle
+        from app.billing.models import LedgerEntry, Statement
+        from app.payments.models import Payment
+        from app.service.models import DailyServiceRecord
+        from tests._ops import close_after_period_end, do_pay, do_record, do_void_payment
+
+        customer = customer_factory(tenant_a.ctx, price_minor=PRICE)
+        do_record(db, tenant_a.ctx, customer, quantity=_Decimal("2"))
+        paid = do_pay(db, tenant_a.ctx, customer, 1000)
+        do_void_payment(db, tenant_a.ctx, paid.result["id"], reason="bounced")
+        close_after_period_end(db, tenant_a, open_cycle(db, tenant_a.ctx))
+        db.expire_all()
+
+        versions: list[int] = []
+        for model in (DailyServiceRecord, LedgerEntry, Payment, Statement):
+            versions += [
+                row.row_version for row in db.execute(select(model)).scalars().all()
+            ]
+        # Every value is distinct: one sequence, never a per-table counter.
+        assert len(versions) == len(set(versions))
+        assert min(versions) >= 1
+
+    def test_billing_cycle_is_deliberately_not_versioned(self, engine):
+        """A cycle is billing scaffolding, not a client sync entity. row_version
+        was added where P0 §7.1 needs it, not to every P2 table for symmetry."""
+        from sqlalchemy import text as _text
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                _text(
+                    "SELECT table_name FROM information_schema.columns "
+                    "WHERE table_schema='public' AND column_name='row_version'"
+                )
+            ).fetchall()
+        versioned = {r[0] for r in rows}
+        assert versioned == {
+            "tenant",
+            "customer",
+            "daily_service_record",
+            "ledger_entry",
+            "payment",
+            "statement",
+        }
+        assert "billing_cycle" not in versioned
+
+
+def _payment(db, payment_id):
+    from app.payments.models import Payment
+
+    return db.execute(
+        select(Payment).where(Payment.id == uuid.UUID(str(payment_id)))
+    ).scalar_one()

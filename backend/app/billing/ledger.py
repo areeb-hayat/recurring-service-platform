@@ -5,6 +5,12 @@ The only module that writes :class:`LedgerEntry`, and it only ever appends
 
 Balances are computed, never stored (FIN-4, P0 §6 "deliberately not created:
 a balance cache table").
+
+Every entry resolves its ``posting_cycle_id`` here, at the single append site, to
+the tenant's currently OPEN cycle (P0 §5.5). ``occurred_on`` is whatever the
+caller passes — the true service or receipt date — so a correction to a closed
+period keeps its real date and is billed on the next statement, without any
+issued statement being rewritten.
 """
 
 from __future__ import annotations
@@ -14,10 +20,18 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.billing.cycles import ensure_open_cycle
 from app.billing.models import EntryKind, LedgerEntry, SourceType
 from app.tenancy.context import TenantContext
 
-__all__ = ["post_entry", "post_service_charge", "post_service_adjustment", "outstanding_minor"]
+__all__ = [
+    "post_entry",
+    "post_service_charge",
+    "post_service_adjustment",
+    "post_payment",
+    "post_payment_adjustment",
+    "outstanding_minor",
+]
 
 
 def post_entry(
@@ -37,11 +51,18 @@ def post_entry(
     ``amount_non_zero`` CHECK, so this returns ``None`` instead. Callers must
     treat "no entry" as a legitimate outcome — a correction that changes nothing,
     or a voided SKIP, genuinely has no ledger effect.
+
+    The entry posts to the tenant's OPEN cycle regardless of ``occurred_on``
+    (P0 §5.5). That single rule covers ordinary posting and late corrections
+    alike: the open cycle is always the latest, so a closed cycle can never gain
+    an entry after its statement was issued.
     """
     if amount_minor == 0:
         return None
     if not isinstance(amount_minor, int) or isinstance(amount_minor, bool):
         raise TypeError("amount_minor must be an int in minor units")
+
+    cycle = ensure_open_cycle(session, ctx)
 
     entry = LedgerEntry(
         tenant_id=ctx.tenant_id,
@@ -49,7 +70,7 @@ def post_entry(
         entry_kind=entry_kind,
         amount_minor=amount_minor,
         occurred_on=occurred_on,
-        posting_cycle_id=None,  # resolved by P2 when billing_cycle exists
+        posting_cycle_id=cycle.id,
         source_type=source_type,
         source_id=source_id,
         created_by_user_id=ctx.user_id,
@@ -94,6 +115,51 @@ def post_service_adjustment(
         amount_minor=amount_minor,
         occurred_on=occurred_on,
         source_type=SourceType.DAILY_SERVICE_RECORD,
+        source_id=source_id,
+    )
+
+
+def post_payment(session: Session, ctx: TenantContext, payment) -> LedgerEntry | None:
+    """PAYMENT for an accepted manual payment — negative, because it reduces debt.
+
+    PAY-1: this is the only place a PAYMENT entry is created, and the only thing
+    that creates one is a ``payment`` row.
+    """
+    return post_entry(
+        session,
+        ctx,
+        customer_id=payment.customer_id,
+        entry_kind=EntryKind.PAYMENT,
+        amount_minor=-payment.amount_minor,
+        occurred_on=payment.received_on,
+        source_type=SourceType.PAYMENT,
+        source_id=payment.id,
+    )
+
+
+def post_payment_adjustment(
+    session: Session,
+    ctx: TenantContext,
+    *,
+    customer_id: uuid.UUID,
+    amount_minor: int,
+    occurred_on,
+    source_id: uuid.UUID,
+) -> LedgerEntry | None:
+    """Payment-origin ADJUSTMENT (P0 §5.3, PAY-7).
+
+    ``source_type`` is ``payment``, which is the whole of what keeps a voided
+    payment out of business generated (FIN-14) while moving collections (FIN-16).
+    Origin decides the report; sign does not.
+    """
+    return post_entry(
+        session,
+        ctx,
+        customer_id=customer_id,
+        entry_kind=EntryKind.ADJUSTMENT,
+        amount_minor=amount_minor,
+        occurred_on=occurred_on,
+        source_type=SourceType.PAYMENT,
         source_id=source_id,
     )
 

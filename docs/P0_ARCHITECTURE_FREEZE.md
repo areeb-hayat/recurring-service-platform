@@ -323,6 +323,25 @@ reversed", and §11.1 needs the two separated to define billed value unambiguous
 
 - `billing_cycle` is per tenant, default calendar-monthly in the tenant timezone. Exactly one
   `OPEN` cycle per tenant, enforced by a partial unique index.
+- **`period_end` is inclusive, and a cycle may not be closed until it has passed (clarified in
+  P2).** The earliest valid close is `business_date > period_end`: the period is still running
+  throughout `period_end` itself, so business events dated that day stay eligible to post to the
+  cycle no matter what time somebody attempts to close it. Closing sooner would end the period
+  somewhere other than where the tenant's configuration says it ends, and the days between the
+  close and the real boundary would be billed in the *following* cycle. Neither the shortened
+  period nor that carry-over was ever a client decision, so V1 refuses the close rather than
+  inventing one, and there is no override flag. Cycles are therefore always full configured
+  periods. An explicit early-close feature, if it is ever wanted, is a separate design with its own
+  product decision.
+- **An `OPEN` cycle whose period has ended accepts no new entry (clarified in P2).** Rollover is
+  not automatic, so a cycle can still be `OPEN` after its `period_end` — an August cycle nobody
+  closed, seen on 1 September. Posting into it would file September's business under a period that
+  is over: a mis-stated bill, not a late one. Such a write **fails closed**, asking for the close
+  operation, and is never resolved by auto-closing the stale cycle from inside a service or payment
+  command — closing issues statements, and issuing a customer's bill as a side effect of recording
+  a delivery is not a decision a write command may take. A scheduled rollover calls the real close.
+  This is one-directional and does not touch §5.5's late-correction or backdating rules: an entry
+  may post to a cycle that *began* before it, never to one that *ended* before it.
 - Carry-forward needs no transfer entry. The ledger is continuous per customer, so the next
   statement's opening balance *is* the previous statement's closing balance.
 - Statements are **immutable documents** once issued.
@@ -349,6 +368,15 @@ Computed in one function used identically by the dashboard, statements, and the 
 `id` is UUIDv7 — time-ordered, generatable on the device while offline, and not enumerable across
 tenants. `row_version` is a `BIGINT` drawn from one shared Postgres sequence, used for both
 optimistic concurrency and the sync change feed.
+
+**Which tables carry `row_version` (clarified in P2).** Every table whose rows appear in the
+client's authoritative `snapshot` store (§7.1) carries it, because §7.4 pages that snapshot on
+`row_version > since`: `tenant`, `customer`, `daily_service_record`, `ledger_entry`, `payment` and
+`statement`. A related row's version is never a substitute for the record's own — a client pulling
+payment history cannot page on the ledger entry a payment happens to post. Server-side tables that
+are not client sync entities — `billing_cycle`, `audit_event`, `sync_operation`, `job_run`, the
+`commission_*` family — deliberately do not carry it; adding one for symmetry would make a table a
+sync entity by accident.
 
 Eighteen tables. Each entry gives: tenant ownership → key uniqueness → immutability → correction link.
 
@@ -394,8 +422,9 @@ snapshots on records, not by a price-history table.**
 **`statement`** — the issued document. `tenant_id`, `customer_id`, `cycle_id`, `issued_at`,
 `opening_balance_minor`, `charges_minor`, `service_adjustments_minor` (signed),
 `payments_minor` (positive = received), `payment_reversals_minor` (positive = reversed),
-`closing_balance_minor`, `service_days`, `total_quantity`, `unit_label`, `currency`.
-Unique `(tenant_id, customer_id, cycle_id)`. **Fully immutable after issue.** The movement columns
+`closing_balance_minor`, `service_days`, `total_quantity`, `unit_label`, `currency`, `row_version`.
+Unique `(tenant_id, customer_id, cycle_id)`. **Fully immutable after issue** — `row_version` is
+drawn once, at issue, and like every other column never changes again. The movement columns
 satisfy the §5.4 identity exactly, and adjustments are split by origin rather than merged — that
 split is what makes billed value (FIN-15) computable from statements without contamination.
 
@@ -409,8 +438,10 @@ sums and `(tenant_id, posting_cycle_id)` for statements. Check `amount_minor <> 
 **`payment`** — an accepted money-in fact, recorded by the owner. `tenant_id`, `customer_id`,
 `amount_minor`, `method` (`CASH` | `BANK_TRANSFER` | `OTHER`), `received_on DATE`, `reference`,
 `note`, `status` (`RECORDED` | `VOIDED`), `voided_reason`, `voided_by_user_id`, `voided_at`,
-`operation_id`, `recorded_by_user_id`, `source`, `recorded_at`. Check `amount_minor > 0`.
-Voiding appends a compensating ledger entry; the row is never deleted.
+`operation_id`, `recorded_by_user_id`, `source`, `recorded_at`, `row_version`.
+Check `amount_minor > 0`. Voiding appends a compensating ledger entry; the row is never deleted.
+`row_version` advances on the `RECORDED -> VOIDED` transition, so a client holding payment history
+offline sees the void on its next delta.
 
 V1 payments are **manual only** — there is no online gateway, no provider reference, and no
 externally verified payment state (see §8 and the scope note in §16). Every payment in the system

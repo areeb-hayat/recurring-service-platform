@@ -9,12 +9,13 @@ satisfies them.
 
 ## Current phase
 
-P0 (architecture freeze) and P1 (backend & data foundation) are complete — see
-`docs/P1_HANDOVER.md`. The backend lives in `backend/`; there is **no frontend yet**. The next
-package is P2 (financial engine: billing cycles, statements, payment ledger, carry-forward).
+P0 (architecture freeze), P1 (backend & data foundation) and P2 (financial engine) are complete —
+see `docs/P1_HANDOVER.md` and `docs/P2_HANDOVER.md`. The backend lives in `backend/`; there is
+**no frontend yet**. P2 added billing cycles, posting-cycle resolution, immutable statements,
+manual payments with void, the derived payment status and the §11.1 reporting derivations.
 
 Do not skip ahead: no UI, no offline sync endpoint, no reminders, no commission engine, no AI and
-no voice before their package. P1 deliberately contains no adapter and makes no network call.
+no voice before their package. P1 and P2 deliberately contain no adapter and make no network call.
 
 Run the backend tests with a real PostgreSQL — never SQLite:
 

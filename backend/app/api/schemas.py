@@ -24,6 +24,9 @@ __all__ = [
     "RecordServiceRequest",
     "CorrectServiceRequest",
     "VoidServiceRequest",
+    "CloseCycleRequest",
+    "RecordPaymentRequest",
+    "VoidPaymentRequest",
     "OperationResponse",
 ]
 
@@ -127,6 +130,33 @@ class CorrectServiceRequest(_Base):
 
 
 class VoidServiceRequest(_Base):
+    operation_id: uuid.UUID
+    reason: NonEmptyStr  # AUD-6
+
+
+# --- billing and payments ----------------------------------------------------
+
+
+class CloseCycleRequest(_Base):
+    operation_id: uuid.UUID
+
+
+class RecordPaymentRequest(_Base):
+    operation_id: uuid.UUID
+    customer_id: uuid.UUID
+    # FIN-1: an integer count of minor units on the wire, never a decimal string
+    # and never a JSON float. PAY-3: strictly positive; there is no upper bound
+    # and no clamp to the outstanding balance, because an overpayment is a legal
+    # credit (FIN-10), not an error.
+    amount_minor: int = Field(gt=0)
+    method: Literal["CASH", "BANK_TRANSFER", "OTHER"] = "CASH"
+    # Omit for "today", resolved server-side from the tenant timezone (R4).
+    received_on: date | None = None
+    reference: str | None = Field(default=None, max_length=120)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class VoidPaymentRequest(_Base):
     operation_id: uuid.UUID
     reason: NonEmptyStr  # AUD-6
 

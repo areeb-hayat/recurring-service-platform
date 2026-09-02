@@ -25,6 +25,7 @@ __all__ = [
     "DEFAULT_TIMEZONE",
     "resolve_timezone",
     "business_date",
+    "validate_business_date",
     "validate_service_date",
 ]
 
@@ -85,8 +86,8 @@ def business_date(now_utc: datetime, tenant_timezone: str) -> date:
     return now_utc.astimezone(resolve_timezone(tenant_timezone)).date()
 
 
-def validate_service_date(requested: date, *, today: date) -> date:
-    """Validate an explicitly requested (historical) service date.
+def validate_business_date(requested: date, *, today: date, field: str) -> date:
+    """Validate an explicitly requested (historical) business date.
 
     Separate from :func:`business_date` on purpose: an explicit date is a
     deliberate act that gets its own check, never an inference from the caller's
@@ -94,13 +95,19 @@ def validate_service_date(requested: date, *, today: date) -> date:
 
     The **only** V1 rule is that it may not be in the future relative to the
     tenant-local business date. There is deliberately no maximum historical age:
-    a backdate window would be an invented product policy, and period locking is
-    a billing-cycle concern that does not exist yet. Do not add one without a
-    client decision.
+    a backdate window would be an invented product policy. Cycle close does not
+    add one either — P0 §11.1 ends with "no period locking beyond cycle close",
+    and a date inside a closed period is still accepted; it simply posts to the
+    open cycle (§5.5). Do not add a window without a client decision.
     """
     if requested > today:
         raise ValueError(
-            f"service_date {requested.isoformat()} is in the future "
+            f"{field} {requested.isoformat()} is in the future "
             f"(tenant business date is {today.isoformat()})"
         )
     return requested
+
+
+def validate_service_date(requested: date, *, today: date) -> date:
+    """The :func:`validate_business_date` rule, applied to a service date."""
+    return validate_business_date(requested, today=today, field="service_date")

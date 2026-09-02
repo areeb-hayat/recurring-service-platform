@@ -55,6 +55,21 @@ class TestSEC5CapabilityDisjointness:
         with pytest.raises(PermissionDeniedError):
             require(_principal(Role.OPERATOR), "service:record")
 
+    def test_SEC8_the_reserved_operator_role_cannot_touch_money(self):
+        """P2 adds financial capabilities; the reserved role still grants none."""
+        for capability in ("payment:record", "payment:void", "billing:close_cycle"):
+            assert not has(_principal(Role.OPERATOR), capability)
+
+    def test_owner_admin_holds_the_p2_financial_capabilities(self):
+        owner = _principal(Role.OWNER_ADMIN)
+        for capability in (
+            "billing:read",
+            "billing:close_cycle",
+            "payment:record",
+            "payment:void",
+        ):
+            require(owner, capability)
+
     def test_owner_admin_holds_the_p1_capabilities(self):
         owner = _principal(Role.OWNER_ADMIN)
         for capability in ("customer:read", "customer:write", "service:record", "service:correct"):

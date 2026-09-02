@@ -13,7 +13,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import auth_router, customer_router, service_router
+from app.api.routes import (
+    auth_router,
+    billing_router,
+    customer_router,
+    payment_router,
+    service_router,
+    statement_router,
+)
 from app.core.config import Settings, get_settings
 from app.core.errors import DomainError
 from app.db_models import import_all_models
@@ -28,7 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Recurring Service, Billing & Collection Platform",
         version="0.1.0",
-        description="P1 — backend & data foundation.",
+        description="P1 backend foundation + P2 financial engine.",
     )
     app.state.settings = settings
 
@@ -69,6 +76,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(customer_router)
     app.include_router(service_router)
+    app.include_router(billing_router)
+    app.include_router(statement_router)
+    app.include_router(payment_router)
     return app
 
 

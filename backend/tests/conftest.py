@@ -27,7 +27,7 @@ from app.bootstrap import provision_tenant, provision_user
 from app.core.clock import FixedClock
 from app.core.config import Settings
 from app.core.db import Base
-from app.db_models import P1_TABLES, import_all_models
+from app.db_models import ALL_TABLES, import_all_models
 from app.identity.models import Role
 from app.main import create_app
 from app.tenancy.context import TenantContext
@@ -55,7 +55,7 @@ def pytest_configure(config):
     """
     if _database_url() is None:
         raise pytest.UsageError(
-            "TEST_DATABASE_URL is not set. The P1 suite requires a real "
+            "TEST_DATABASE_URL is not set. This suite requires a real "
             "PostgreSQL database and will not fall back to SQLite or skip. "
             "Start it with: docker compose -f docker-compose.test.yml up -d  and set "
             "TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:55432/rsp_test"
@@ -95,7 +95,7 @@ def session_factory(engine):
 @pytest.fixture(autouse=True)
 def clean_tables(engine):
     """Truncate between tests. Cheaper and more realistic than per-test schemas."""
-    tables = ", ".join(sorted(P1_TABLES))
+    tables = ", ".join(sorted(ALL_TABLES))
     with engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
     yield

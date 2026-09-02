@@ -18,6 +18,8 @@ __all__ = [
     "ConflictError",
     "ServiceAlreadyRecordedError",
     "IdempotencyKeyReuseError",
+    "CyclePeriodNotEndedError",
+    "CycleRolloverRequiredError",
 ]
 
 
@@ -72,9 +74,46 @@ class ValidationFailed(DomainError):
     code = "VALIDATION"
 
 
+class CyclePeriodNotEndedError(ValidationFailed):
+    """A billing cycle may not be closed until its ``period_end`` has passed.
+
+    ``period_end`` is **inclusive**, so the period is still running throughout
+    that day: business events dated on `period_end` must stay eligible to post to
+    the cycle no matter what time of day somebody attempts to close it. The
+    earliest valid close is therefore ``business_date > period_end``.
+
+    Closing sooner would end the period somewhere other than where the tenant's
+    configuration says it ends, and the days between the close and the real
+    boundary would be billed in the *following* cycle. Neither the shortened
+    period nor that carry-over was ever a client decision, so V1 refuses instead
+    of inventing one. An explicit early-close feature, if it is ever wanted, is a
+    separate design with its own product decision — not an override flag here.
+    """
+
+    code = "CYCLE_PERIOD_NOT_ENDED"
+
+
 class ConflictError(DomainError):
     status_code = 409
     code = "CONFLICT"
+
+
+class CycleRolloverRequiredError(ConflictError):
+    """The tenant's only OPEN cycle ended before today, so nothing may post.
+
+    An expired cycle that is still open means the rollover has not happened yet.
+    Posting a new event into it would file today's business under a period that
+    has already ended — a mis-stated bill, not a late one — so the write fails
+    closed and asks for the proper close operation instead.
+
+    Deliberately **not** resolved by auto-closing the stale cycle from inside a
+    service or payment command: closing a cycle issues statements, and issuing a
+    customer's bill as a side effect of somebody recording a bottle of milk is
+    not a decision a write command gets to make. A scheduled rollover calls the
+    real close operation.
+    """
+
+    code = "CYCLE_ROLLOVER_REQUIRED"
 
 
 class ServiceAlreadyRecordedError(ConflictError):

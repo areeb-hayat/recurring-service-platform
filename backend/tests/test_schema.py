@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from app.db_models import P1_TABLES
+from app.db_models import ALL_TABLES
 
 pytestmark = pytest.mark.postgres
 
@@ -33,24 +33,21 @@ def _scalar(engine, sql: str, **params):
 
 
 class TestTableInventory:
-    def test_exactly_the_p1_tables_exist(self, engine):
+    def test_exactly_the_expected_tables_exist(self, engine):
         rows = _rows(
             engine,
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY 1",
         )
         actual = {r[0] for r in rows} - {"alembic_version"}
-        assert actual == set(P1_TABLES), (
-            f"unexpected: {sorted(actual - set(P1_TABLES))}, "
-            f"missing: {sorted(set(P1_TABLES) - actual)}"
+        assert actual == set(ALL_TABLES), (
+            f"unexpected: {sorted(actual - set(ALL_TABLES))}, "
+            f"missing: {sorted(set(ALL_TABLES) - actual)}"
         )
 
     @pytest.mark.parametrize(
         "forbidden",
         [
-            # Future packages — must not be in the P1 baseline.
-            "billing_cycle",
-            "statement",
-            "payment",
+            # Later packages — must not exist yet.
             "reminder",
             "communication_log",
             "commission_plan",
@@ -75,7 +72,7 @@ class TestTableInventory:
             "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename = :t",
             t=forbidden,
         )
-        assert exists == 0, f"table {forbidden!r} must not exist in P1"
+        assert exists == 0, f"table {forbidden!r} must not exist yet"
 
     def test_shared_row_version_sequence_exists(self, engine):
         assert (
@@ -97,7 +94,15 @@ class TestTableInventory:
             """,
         )
         versioned = {r[0] for r in rows}
-        assert versioned == {"tenant", "customer", "daily_service_record", "ledger_entry"}
+        assert versioned == {
+            "tenant",
+            "customer",
+            "daily_service_record",
+            "ledger_entry",
+            # P2: authoritative records the client holds offline (P0 7.1, 7.4).
+            "payment",
+            "statement",
+        }
         for table in versioned:
             default = _scalar(
                 engine,
@@ -114,7 +119,15 @@ class TestTableInventory:
 
 # --- SEC-1 / SEC-2 ----------------------------------------------------------
 
-TENANT_OWNED = ["customer", "daily_service_record", "ledger_entry", "sync_operation"]
+TENANT_OWNED = [
+    "customer",
+    "daily_service_record",
+    "ledger_entry",
+    "sync_operation",
+    "billing_cycle",
+    "statement",
+    "payment",
+]
 
 
 class TestSEC1TenantColumns:
