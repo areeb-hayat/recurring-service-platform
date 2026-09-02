@@ -1,0 +1,44 @@
+[project]
+name = "rsp-backend"
+version = "0.1.0"
+description = "Recurring Service, Billing & Collection Platform — backend (P1 foundation)"
+requires-python = ">=3.12"
+
+# Deliberately minimal. Every entry below is required by P1 scope; nothing speculative.
+# No Redis, no Celery, no broker, no RBAC framework, no generic repository layer.
+dependencies = [
+    "fastapi>=0.115,<1.0",          # API layer (P0 frozen stack)
+    "pydantic>=2.9,<3.0",           # request/response models
+    "pydantic-settings>=2.5,<3.0",  # env-driven configuration (P0 §13)
+    "SQLAlchemy>=2.0.36,<2.1",      # typed ORM (P0 frozen stack)
+    "alembic>=1.13,<2.0",           # migrations
+    "psycopg[binary]>=3.2,<4.0",    # PostgreSQL driver
+    "PyJWT>=2.9,<3.0",              # short-lived access tokens (P0 §3.3)
+    "argon2-cffi>=23.1,<26.0",      # password hashing (SEC-11)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9.0",
+    "hypothesis>=6.112,<7.0",       # money/rounding property tests (A-FIN-1/3)
+    "httpx>=0.27,<1.0",             # required by fastapi TestClient
+    "uvicorn>=0.30,<1.0",           # local run only; not imported by app code
+]
+
+# pytest-asyncio is intentionally NOT a dependency: the P1 backend uses synchronous
+# SQLAlchemy sessions and synchronous FastAPI handlers, so no async test driver is needed.
+# See docs/P1_HANDOVER.md.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:app.*"]
+markers = [
+    "postgres: test requires a live PostgreSQL database (TEST_DATABASE_URL)",
+]
