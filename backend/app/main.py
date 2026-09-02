@@ -21,6 +21,7 @@ from app.api.routes import (
     platform_commission_router,
     service_router,
     statement_router,
+    tenant_router,
 )
 from app.core.config import Settings, get_settings
 from app.core.errors import DomainError
@@ -75,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(auth_router)
+    app.include_router(tenant_router)
     app.include_router(customer_router)
     app.include_router(service_router)
     app.include_router(billing_router)

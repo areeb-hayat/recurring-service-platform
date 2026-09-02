@@ -9,16 +9,24 @@ satisfies them.
 
 ## Current phase
 
-P0 (architecture freeze), P1 (backend & data foundation), P2 (financial engine) and P3
-(commercial tracking / commission) are complete — see `docs/P1_HANDOVER.md`,
-`docs/P2_HANDOVER.md` and `docs/P3_HANDOVER.md`. The backend lives in `backend/`; there is
-**no frontend yet**. P2 added billing cycles, posting-cycle resolution, immutable statements,
-manual payments with void, the derived payment status and the §11.1 reporting derivations. P3
-added the four commission tables, the four earning bases, snapshotted terms, signed adjustments,
-aggregate settlement and the platform-only commission surface.
+P0 (architecture freeze), P1 (backend & data foundation), P2 (financial engine), P3
+(commercial tracking / commission) and P4 (customer & daily UI) are complete — see
+`docs/P1_HANDOVER.md`, `docs/P2_HANDOVER.md`, `docs/P3_HANDOVER.md` and
+`docs/P4_HANDOVER.md`. The backend lives in `backend/` and the frontend in `frontend/`.
+P2 added billing cycles, posting-cycle resolution, immutable statements, manual payments with
+void, the derived payment status and the §11.1 reporting derivations. P3 added the four
+commission tables, the four earning bases, snapshotted terms, signed adjustments, aggregate
+settlement and the platform-only commission surface. P4 added the first frontend: login, the
+authenticated shell, customer list/create/view/edit and the Daily Register.
 
-Do not skip ahead: no UI, no offline sync endpoint, no reminders, no AI and no voice before their
-package. P1, P2 and P3 deliberately contain no adapter and make no network call.
+**P4 is online-first.** It has no Service Worker, no IndexedDB, no outbox and no sync — that
+is P5, and nothing in P4 pretends otherwise. What P4 does provide is the operation envelope
+(`frontend/src/api/operation.ts`) and the unresolved-operation state machine
+(`frontend/src/daily/usePendingOperation.ts`), so P5 has somewhere to persist envelopes without
+reshaping the write path.
+
+Do not skip ahead: no offline sync endpoint, no reminders, no AI and no voice before their
+package. P1–P4 deliberately contain no adapter and make no network call to any provider.
 
 Run the backend tests with a real PostgreSQL — never SQLite:
 
@@ -26,6 +34,34 @@ Run the backend tests with a real PostgreSQL — never SQLite:
     docker compose -f docker-compose.test.yml up -d
     export TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:55432/rsp_test
     pytest
+
+Run the frontend tests, typecheck and build from `frontend/`:
+
+    cd frontend
+    npm install
+    npm test            # vitest
+    npm run typecheck   # tsc --noEmit
+    npm run build       # typecheck, then vite build
+
+## Collaboration
+
+Two developers, two worktrees, one repository. Yahya's development worktree is
+`E:\Recurring-Service-Platform-yahya` on branch `yahya`, pushing to `origin/yahya`. Never push
+Yahya development directly to `origin/main`, and never modify Areeb's worktree or branch from
+this one. Integration into `main` is a separate, deliberate action — not a side effect of
+finishing a package.
+
+## Production accounts
+
+There is **no shared generic privileged login**, and none is to be created. Each person holds
+their own identity so every audit event stays attributable:
+
+- the client / business owner has their own `OWNER_ADMIN` account;
+- Yahya has their own `PLATFORM_OWNER` identity;
+- Areeb has their own `PLATFORM_OWNER` identity.
+
+Equal platform capability, separate identities. Never hard-code a real production user or
+password into source, a migration, a seed script or a test fixture.
 
 ## Frozen stack
 
@@ -97,17 +133,20 @@ column or a settlement-allocation table.
 or a closed candidate intent (write-suggestion). Neither can write, and the product — including
 button-based daily operations — must work fully with AI disabled.
 
-**Providers are replaceable.** No GHL, Groq, or speech-vendor identifier — and no model string like
-`whisper-large-v3` — may appear outside `app/adapters/` and configuration. Domain modules import
+**Providers are replaceable.** No GHL, ElevenLabs, Groq or other vendor identifier — and no model
+string like `scribe_v2` — may appear outside `app/adapters/` and configuration. Domain modules import
 ports, never adapters. The ports are `CommunicationProvider`, `SpeechToTextProvider`,
 `SearchInterpreter`, and `OperationalIntentInterpreter`.
 
-**Speech-to-text: Groq `whisper-large-v3` is the frozen initial implementation** (`SPEECH_PROVIDER`,
-`SPEECH_MODEL`), selected for accuracy because utterances carry names and quantities. That froze an
-implementation, not the port — the model is expected to be re-evaluated against real speech and may
-be swapped. Tests always run on `MockSpeechToTextProvider`; never make a live provider call in a
-test. One `GROQ_API_KEY` serves both the speech adapter and the interpreters, but they stay separate
-ports with separate contracts.
+**Speech-to-text: ElevenLabs `scribe_v2` is the initial implementation** (`SPEECH_PROVIDER`,
+`SPEECH_MODEL`, secret `ELEVENLABS_API_KEY`), selected for accuracy because utterances carry names
+and quantities. This supersedes the earlier Groq `whisper-large-v3` choice (P0 §8.5, amended in P4).
+It froze an implementation, not the port — the model is expected to be re-evaluated against real
+speech and may be swapped again. Groq may still be used later for *constrained text intent
+interpretation*; it is no longer the transcriber. Tests always run on `MockSpeechToTextProvider`;
+never make a live provider call in a test. Raw audio is never persisted and transcripts stay
+ephemeral. **Voice is P9 — do not implement any of this earlier**, and the button workflow stays
+authoritative and always available whatever happens to voice.
 
 ## Code boundaries
 
@@ -121,6 +160,20 @@ app/adapters   comms/ speech/ ai/ — mock + real implementations
 app/api        HTTP routers (thin: auth, validate, call domain, serialize)
 app/jobs       daily job entrypoints
 ```
+
+```
+frontend/src/api        typed HTTP boundary, error envelope, operation envelope
+frontend/src/auth       session storage, AuthContext, login screen
+frontend/src/components shell, auth gate, feedback, quantity stepper
+frontend/src/customers  list, create, detail/edit
+frontend/src/daily      the Daily Register and the pending-operation hook
+frontend/src/lib        exact quantity arithmetic, money display, uuidv7
+```
+
+The frontend renders what the server returned. It never computes a charge, a balance, a due
+state, a payment status or a commission figure, and it never sends a `tenant_id` — the bearer
+token decides the scope. Quantity arithmetic goes through `lib/decimal.ts` on scaled integers,
+never through a JS `number`.
 
 Domain → ports: allowed. Domain → adapters: forbidden. API → domain: allowed. Domain → API:
 forbidden.

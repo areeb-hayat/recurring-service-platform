@@ -762,11 +762,30 @@ a write-candidate schema with different authority must not be one overloaded obj
 `MockSpeechToTextProvider` and a deterministic mock interpreter drive every automated test with no
 network access. Automated tests never make a live provider call.
 
-**Initial implementation (frozen):**
+**Initial implementation.**
+
+> **Amended in P4 (2026-09-03).** The owner has changed the initial STT
+> implementation to **ElevenLabs `scribe_v2`**, with the server secret
+> `ELEVENLABS_API_KEY`. The paragraphs below describe the *superseded* Groq
+> choice and are kept because the reasoning — accuracy over latency, for
+> utterances carrying names and quantities — is unchanged and is what the new
+> selection was made against. Everything structural here still holds exactly:
+> the port, the adapter boundary, the mock in tests, the mandatory confirmation
+> step, and the button fallback. Groq may still back the *text* intent
+> interpreters; it no longer backs transcription. See `docs/P4_HANDOVER.md` §
+> "Owner decisions recorded during P4". Voice remains P9; nothing is implemented.
 
 ```
 SpeechToTextProvider          ← the port the domain depends on
     ↓
+ElevenLabsSpeechToTextAdapter ← app/adapters/speech/elevenlabs.py   (P9)
+    ↓
+scribe_v2                     ← SPEECH_MODEL, configuration only
+```
+
+The superseded initial choice, for the record:
+
+```
 GroqSpeechToTextAdapter       ← app/adapters/speech/groq.py
     ↓
 whisper-large-v3              ← SPEECH_MODEL default, configuration only
@@ -1165,11 +1184,12 @@ blocks P1–P8.
 | D9 | Customer self-service portal / login | client | out of scope in V1 | not planned |
 | D10 | Multi-currency per tenant | platform owner | currency on `tenant` | only if a second market appears |
 | D11 | The client's real business unit (litres? bottles? service units?) | client | `tenant.unit_label`, defaulted to the generic `unit` | before first production data entry |
-| D12 | Whether Groq `whisper-large-v3` is good enough in production against representative real utterances — English, Urdu, Roman Urdu intent after transcription, Urdu-English code-switching, Pakistani accents, customer names, numbers and quantities, and realistic background noise — at acceptable cost and latency | us + client | `SpeechToTextProvider` port and `SPEECH_MODEL`; voice is optional and degradable | during P9 evaluation, before voice is promoted to a primary path |
+| D12 | Whether the selected STT model (**ElevenLabs `scribe_v2` as amended in P4**; formerly Groq `whisper-large-v3`) is good enough in production against representative real utterances — English, Urdu, Roman Urdu intent after transcription, Urdu-English code-switching, Pakistani accents, customer names, numbers and quantities, and realistic background noise — at acceptable cost and latency | us + client | `SpeechToTextProvider` port and `SPEECH_MODEL`; voice is optional and degradable | during P9 evaluation, before voice is promoted to a primary path |
 | D13 | Whether transcripts may be persisted (analytics, dispute resolution) | client + us | currently ephemeral-only by rule (§8.4) | needs an explicit product and privacy decision before any change |
 
-**Closed since the first freeze:** the speech-to-text *provider* question is settled — Groq
-`whisper-large-v3` is the initial implementation (§8.5). What remains open is D12, whether its
+**Closed since the first freeze:** the speech-to-text *provider* question is settled — as
+**amended in P4**, ElevenLabs `scribe_v2` is the initial implementation, superseding Groq
+`whisper-large-v3` (§8.5). What remains open is D12, whether its
 real-world quality, cost, and latency are acceptable. If they are not, the response is to change
 the model or the adapter behind the unchanged port — **not** to redesign the voice or domain
 architecture. Voice stays optional and the buttons stay the guaranteed fallback either way.

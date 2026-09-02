@@ -87,8 +87,10 @@ from app.service.commands import (
 )
 from app.sync.idempotency import execute_idempotent
 from app.tenancy.context import TenantContext
+from app.tenancy.settings import tenant_settings
 
 auth_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+tenant_router = APIRouter(prefix="/api/v1/tenant", tags=["tenant"])
 customer_router = APIRouter(prefix="/api/v1/customers", tags=["customers"])
 service_router = APIRouter(prefix="/api/v1/service", tags=["service"])
 billing_router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
@@ -145,6 +147,24 @@ def logout(
 ) -> Response:
     auth_service.logout(session, refresh_token=body.refresh_token, clock=clock)
     return Response(status_code=204)
+
+
+# --- tenant configuration ---------------------------------------------------
+
+
+@tenant_router.get("/settings")
+def tenant_settings_route(
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("dashboard:read"))],
+) -> dict:
+    """The tenant's own configuration and business date (P0 §4, R4).
+
+    Gated by ``dashboard:read`` — the existing P0 §3.2 capability for reading the
+    business's own top-level state. No capability was added: the frozen map is
+    unchanged, and only ``OWNER_ADMIN`` holds this one.
+    """
+    return tenant_settings(session, ctx)
 
 
 # --- customers --------------------------------------------------------------

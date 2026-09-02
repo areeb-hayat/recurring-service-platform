@@ -129,7 +129,14 @@ def list_customers(
         stmt = stmt.where(Customer.area == area)
     if status:
         stmt = stmt.where(Customer.status == status)
-    stmt = stmt.order_by(Customer.name).limit(min(limit, 500)).offset(offset)
+    # Ordered by (name, id), not by name alone. `name` is not unique, and an
+    # offset/limit page is only sound over a *total* order: with ties at a page
+    # boundary PostgreSQL is free to return them in a different relative order
+    # for each page, so a caller walking the pages could miss a customer or see
+    # one twice. `id` breaks every tie deterministically. This does not change
+    # the contract — customers still come back in name order — it makes the
+    # pagination the contract already offers actually correct.
+    stmt = stmt.order_by(Customer.name, Customer.id).limit(min(limit, 500)).offset(offset)
     return list(session.execute(stmt).scalars().all())
 
 

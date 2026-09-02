@@ -466,6 +466,7 @@ class TestRouteInventory:
     """A-SEC-3/4: the mechanism notices new scoped routes automatically."""
 
     EXERCISED = {
+        ("GET", "/api/v1/tenant/settings"),
         ("GET", "/api/v1/customers"),
         ("POST", "/api/v1/customers"),
         ("GET", "/api/v1/customers/{customer_id}"),
