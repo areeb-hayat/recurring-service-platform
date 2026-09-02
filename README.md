@@ -30,6 +30,8 @@ The owner should be able to:
   - Amount outstanding
 - Run reminder/follow-up logic for unpaid customers.
 - Keep the important daily workflow usable even when internet is unavailable.
+- Use **voice** instead of typing where that is easier — both to search and to record a day's
+  service — without voice ever being required.
 
 ---
 
@@ -44,6 +46,8 @@ The owner should be able to:
 - Records payments.
 - Views bills, balances, histories, reminders and dashboards.
 - Can correct mistakes through controlled correction/void/reversal flows.
+- May have limited software literacy, so the interface must stay simple and offer voice as an
+  easier input method.
 
 ### Customer
 
@@ -121,6 +125,9 @@ Rules:
 - Repeated clicks must not create duplicate records.
 - The next customer should appear immediately after completion.
 
+The same day can also be recorded by voice (see section 7). Voice always ends in a confirmation
+step, and these buttons remain fully available at all times.
+
 ---
 
 ## 5. Billing & Payments
@@ -140,14 +147,22 @@ Must support:
 - Customer statements.
 - Payment history.
 - Manual payment recording.
-- Online payment recording after verified gateway confirmation.
 - Duplicate-payment protection.
+- Payment void/reversal through the correction rules in section 9.
+
+Payments in V1 are recorded manually by the owner:
+
+- `CASH`
+- `BANK_TRANSFER`
+- `OTHER`
 
 Important:
 
-- A browser success page alone must never mark a payment as paid.
-- Online payment must be verified through the selected provider/server integration.
-- The same provider callback must never create the same payment twice.
+- An **online payment gateway is not part of V1.** The client has confirmed it is not required.
+- Duplicate protection comes from unique operation ids, because two genuine equal payments on the
+  same day from the same customer are legitimate and must not be blocked.
+- If online payments are ever added later, they plug in behind the existing payment ledger without
+  changing it.
 
 ---
 
@@ -198,49 +213,123 @@ Pending external information:
 
 ---
 
-## 7. Online Payment Gateway
+## 7. Voice Input
 
-Online payment is in scope.
+Some users have limited education or software literacy. Voice is a first-class way to use the
+application without typing.
 
-One important business question is still pending:
+Voice is always **optional**. Every normal control stays available.
 
-- Pakistan-only payments?
-- Pakistan + international payments?
+### Voice Search
 
-This affects provider selection.
+Press the microphone and say the same thing you could type:
 
-### Architecture Rule
-
-Do not hard-code one provider into the billing engine.
-
-Create a payment-provider interface.
-
-Responsibilities:
-
-- Create payment request/link.
-- Verify payment.
-- Get payment status.
-- Handle provider callback/webhook.
-- Prevent duplicates.
-- Map provider state to our internal payment state.
-
-During development:
+- "Show unpaid customers in G-10."
+- "Who owes more than five thousand rupees?"
+- Roman Urdu / Urdu-English mixed speech where supported.
 
 ```text
-Payment Provider Interface
-        ↓
-Mock/Test Provider
+speech
+   ↓
+text
+   ↓
+existing smart search
+   ↓
+normal database query
 ```
 
-Later:
+Voice adds no new search powers. It is another way to type.
+
+### Voice Daily Entry
+
+Say a normal sentence:
+
+- "Essa bought 2 bottles"
+- "Essa got three units today"
+- "Essa ne 3 kitaabein khareedein"
+
+English, Roman Urdu, and mixed phrasing are the goal, subject to what transcription can actually
+support.
+
+The system turns this into a **suggestion**, not a record:
 
 ```text
-Payment Provider Interface
-        ↓
-Selected Real Gateway
+speech
+   ↓
+text
+   ↓
+understood as: customer / quantity / unit / date
+   ↓
+CONFIRMATION SCREEN
+   ↓
+normal daily service record
 ```
 
-If the client already has an approved gateway, prefer using it unless there is a strong reason not to.
+### Confirmation Is Required
+
+Speech and name matching can be wrong, so nothing is saved until the user agrees:
+
+```text
+I heard:
+
+Essa
+2 bottles
+Today
+
+Charge: Rs. 500
+
+[ CONFIRM ]
+[ TRY AGAIN ]
+```
+
+Rules:
+
+- If the customer name is unclear, show a short list of choices with large buttons. Never guess.
+- If the quantity is missing, ask for it or use the normal `-` / `+` control. Never invent it.
+- If the date is unclear, ask. Never invent it.
+- If what was said conflicts with the business settings, ask. Never override settings.
+- The amount is always calculated by the system, never by the AI.
+
+### What Voice May Do In V1
+
+Allowed:
+
+- Search.
+- Record service.
+- Skip service for today.
+
+Not allowed:
+
+- Recording payments.
+- Changing prices.
+- Anything to do with commission or settlements.
+- Corrections, voids, or reversals.
+- Business settings or user accounts.
+
+Those stay in normal screens. This is a safety choice for V1, not a permanent limit.
+
+### Voice And The Internet
+
+- Voice needs the internet.
+- The normal button workflow still works offline, exactly as before.
+- If voice is unavailable for any reason, the normal controls remain fully usable.
+
+### Voice Privacy
+
+- Recorded audio is **not** stored by the application.
+- Transcripts are used for the confirmation step and not kept.
+- Saved records store the ordinary business data, plus a note that the entry came from voice.
+
+### Leave This Pluggable
+
+- Do not hard-code one speech-to-text vendor into business logic.
+- Create a speech-to-text interface with a mock/test provider for development and tests.
+- The initial implementation is **Groq speech-to-text with `whisper-large-v3`**, chosen because
+  accuracy matters more than speed here: the spoken sentences carry customer names and quantities,
+  and a mis-heard word becomes a wrong entry suggestion.
+- The interface stays in place because the model may change after real-user testing. Quality for
+  English, Urdu, Roman Urdu, mixed speech, and Pakistani accents still has to be proven in practice,
+  and the confirmation step is required either way.
 
 ---
 
@@ -400,10 +489,15 @@ Examples:
 - "Who owes more than Rs. 5,000?"
 - Roman Urdu queries.
 
+The same search works by voice (section 7): speech becomes text, and the text goes through this
+same path.
+
 AI may:
 
 - Interpret natural language.
 - Convert it into strict search/filter parameters.
+- Interpret a spoken daily-entry sentence into a **suggested** service entry, which a person must
+  confirm before anything is saved.
 
 AI may **not**:
 
@@ -413,6 +507,7 @@ AI may **not**:
 - Create/modify billing records.
 - Change commission.
 - Mutate authoritative financial data.
+- Save anything directly, including from voice.
 
 Backend validates filters and performs the real deterministic database query.
 
@@ -457,7 +552,8 @@ Rules:
 - Audit/correction rules.
 - API boundaries.
 - GHL adapter contract.
-- Payment-provider contract.
+- Speech-to-text adapter contract.
+- Voice authority/confirmation model.
 - Acceptance criteria.
 
 ### P1 — Backend & Data Foundation
@@ -526,16 +622,7 @@ Rules:
 - Communication adapter.
 - Mock provider.
 
-### P8 — Payment Integration Layer
-
-- Provider interface.
-- Mock provider.
-- Payment links/requests.
-- Verification.
-- Callback/webhook processing.
-- Duplicate protection.
-
-### P9 — Groq Smart Search
+### P8 — Smart Search
 
 - Natural-language interpretation.
 - Strict filter schema.
@@ -543,15 +630,25 @@ Rules:
 - Deterministic DB queries.
 - Fallback normal search.
 
-### P10 — Real GHL / Payment Provider
+### P9 — Voice Input
+
+- Speech-to-text interface.
+- Mock/test speech provider.
+- Voice search.
+- Spoken daily entry into a suggested intent.
+- Confirmation screen.
+- Ambiguity/missing-value handling.
+- Voice provenance on saved records.
+- Clean fallback when voice is unavailable.
+
+### P10 — Real GHL / Real Speech Provider
 
 Only when external details are available:
 
 - Connect GHL.
-- Connect selected payment provider.
-- Test sandbox.
-- Test callbacks.
 - Test WhatsApp delivery.
+- Select and connect a real speech-to-text provider.
+- Test real Urdu / Roman Urdu / mixed speech.
 - Production activation when credentials/approvals are available.
 
 ### P11 — Full E2E Hardening
@@ -564,14 +661,15 @@ Test:
 - Offline restart.
 - Duplicate sync.
 - Lost network responses.
-- Provider duplicate callbacks.
-- Wrong/invalid payment states.
+- Duplicate manual payments.
 - Reminder cancellation.
+- Voice confirmation, ambiguity, and refusal of unsupported voice commands.
 - Tenant isolation.
 - Client/platform permissions.
 - Immutable history.
 - AI outage.
 - GHL/provider outage.
+- Speech provider outage.
 
 ### P12 — Deployment & Handover
 
@@ -590,14 +688,18 @@ Test:
 
 These are **not blockers for core development**.
 
-### Payment
+### Voice
 
-- Pakistan only OR Pakistan + international?
-- Existing merchant gateway account?
-- Selected provider.
-- Merchant/KYC approval.
-- Sandbox credentials.
-- Production credentials.
+The speech provider is chosen for the first implementation: Groq with `whisper-large-v3`.
+Still open:
+
+- Whether real-world quality is good enough for English, Urdu, Roman Urdu, mixed speech, Pakistani
+  accents, customer names, quantities, and normal background noise.
+- Acceptable cost and latency per spoken entry.
+- Whether transcripts may ever be stored (currently they are not).
+
+If quality disappoints, the answer is a different model or provider behind the same interface — not
+a redesign.
 
 ### WhatsApp / GHL
 
@@ -637,11 +739,12 @@ Start immediately with:
 - Commission architecture.
 - Reminder engine.
 - Mock communication adapter.
-- Mock payment provider.
+- Mock speech provider.
 - Groq search.
+- Voice search and voice daily entry against mocks.
 - Automated tests.
 
-Then plug GHL and the selected payment gateway into their defined interfaces later.
+Then plug GHL and the selected speech provider into their defined interfaces later.
 
 ---
 
@@ -652,11 +755,14 @@ Then plug GHL and the selected payment gateway into their defined interfaces lat
 - Server is authoritative.
 - Offline changes are queued safely.
 - Never duplicate service/payment operations.
-- Never mark an online payment paid from a frontend redirect alone.
 - Never silently overwrite historical financial facts.
 - Never let AI mutate authoritative financial data.
+- Never save a voice entry without explicit confirmation.
+- Never let voice reach payments, prices, commission, corrections, or settings.
+- Never guess a customer, quantity, or date from speech.
+- Never store raw voice audio.
 - Never let GHL become the source of financial truth.
-- Never hard-code the unknown payment provider into core billing logic.
+- Never hard-code a speech or AI vendor into core business logic.
 - Keep client data tenant-isolated.
 - Keep platform commission authority protected.
 - Prefer the simplest implementation that satisfies these rules.
@@ -669,17 +775,19 @@ The owner can:
 
 - Log in.
 - Add customers.
-- Record a full day quickly from a phone.
+- Record a full day quickly from a phone, by button or by voice.
 - Keep recording if internet temporarily disappears.
 - Generate accurate bills automatically.
-- Record manual and online payments.
+- Record manual payments.
 - See correct outstanding balances.
 - Automatically stop/reduce reminders after payment.
 - Send bills/reminders through the eventual GHL/WhatsApp integration.
-- Accept online payments through the eventual selected payment provider.
 - See clear dashboards and history.
 - Correct mistakes without erasing history.
 - Use Smart Search without giving AI financial authority.
+- Speak a daily entry, check the confirmation screen, and save it — with the same result as
+  pressing the buttons.
+- Keep working normally when voice or AI is unavailable.
 
 The platform side can:
 
