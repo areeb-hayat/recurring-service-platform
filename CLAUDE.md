@@ -10,10 +10,10 @@ satisfies them.
 ## Current phase
 
 P0 (architecture freeze), P1 (backend & data foundation), P2 (financial engine), P3
-(commercial tracking / commission), P4 (customer & daily UI) and P5 (offline & sync) are
-complete — see `docs/P1_HANDOVER.md`, `docs/P2_HANDOVER.md`, `docs/P3_HANDOVER.md`,
-`docs/P4_HANDOVER.md` and `docs/P5_HANDOVER.md`. The backend lives in `backend/` and the
-frontend in `frontend/`.
+(commercial tracking / commission), P4 (customer & daily UI), P5 (offline & sync) and P6
+(owner financial dashboard & operating costs) are complete — see `docs/P1_HANDOVER.md`
+through `docs/P6_HANDOVER.md`. The backend lives in `backend/` and the frontend in
+`frontend/`.
 P2 added billing cycles, posting-cycle resolution, immutable statements, manual payments with
 void, the derived payment status and the §11.1 reporting derivations. P3 added the four
 commission tables, the four earning bases, snapshotted terms, signed adjustments, aggregate
@@ -26,13 +26,27 @@ and `GET /sync/changes` live in `backend/app/sync/`. The Daily Register now read
 writes through the outbox, so there is one write path online and off.
 
 **V1's offline write guarantee is CONFIRM and SKIP only** (`service.record`, `service.skip`) — see
-the dated clarification at P0 §7.2. Payments, corrections, voids and customer create/edit stay
-online-only; the envelope is extensible, the scope is not. The Service Worker caches **no API
-response** — business data offline comes from the snapshot, and a missing snapshot says
-"Unavailable offline" rather than guessing.
+the dated clarification at P0 §7.2. Payments, corrections, voids, customer create/edit and every
+operating-cost write stay online-only; the envelope is extensible, the scope is not. The Service
+Worker caches **no API response** — business data offline comes from the snapshot, and a missing
+snapshot says "Unavailable offline" rather than guessing.
 
-Do not skip ahead: no reminders, no AI and no voice before their package. P1–P5 deliberately
-contain no adapter and make no network call to any provider.
+**P6 built the owner's financial surface.** The dashboard (`/dashboard/summary`,
+`/dashboard/outstanding`), the statement list, manual payment recording and reversal, the customer
+financial view, and a new **Operating Costs** area — what the business pays its *providers*,
+recorded against versioned rates with estimated-vs-actual variance. `payment` and `statement`
+joined the sync feed (read-only; `SYNC_FEED_VERSION` is now **2**), and their op types joined
+`FEED_WRITING_OP_TYPES` so they inherit the SYN-10 commit-order boundary.
+
+**Operating costs are a third, separate accounting concept** — see the dated P0 §15a addition and
+the COST invariants. `ledger_entry` is what a customer owes the business; `commission_*` is what
+the business owes the platform; `operating_cost_*` is what the business owes its providers. They
+are never summed, never share a table, and never share a capability (`cost:read` / `cost:write`
+were added to `OWNER_ADMIN`). No provider price is hard-coded — every rate is a row.
+
+Do not skip ahead: no reminders, no AI and no voice before their package. P1–P6 deliberately
+contain no adapter and make no network call to any provider — P6 *records* provider expenses, it
+does not fetch a vendor invoice.
 
 Run the backend tests with a real PostgreSQL — never SQLite:
 
@@ -131,6 +145,14 @@ persist raw audio, and keep transcripts ephemeral.
 composite foreign keys `(tenant_id, id)`, not by application care alone. Every query is scoped by
 the principal's tenant.
 
+**Operating costs are not commission and not the customer ledger.** `operating_cost_*` records
+what the business pays its providers. It never posts a ledger entry, never moves a customer's
+outstanding balance, and never touches a commission row — and the reverse holds too. Provider rates
+are versioned data with non-overlapping effective ranges; a recorded month snapshots the terms it
+used, so a later rate change never restates it. Money stays integer minor units, usage stays
+`Decimal`, and amounts stay in the provider's own currency — there is no FX feature and totals are
+per currency. No usage means no estimate and no invoice means no actual: never a zero.
+
 **Platform commission is protected.** Tenant users have no read and no write access to commission
 plans, events, adjustments, or settlements. Only the platform scope does. Commission is earned by
 the server inside the transaction that accepts the source business event, never by a client; every
@@ -163,7 +185,7 @@ authoritative and always available whatever happens to voice.
 ```
 app/core       money, ids, time, config, security primitives
 app/<domain>   tenancy identity customers service billing payments
-               commission reminders sync search voice
+               commission costs reminders sync search voice
 app/ports      CommunicationProvider, SpeechToTextProvider,
                SearchInterpreter, OperationalIntentInterpreter (Protocols)
 app/adapters   comms/ speech/ ai/ — mock + real implementations
@@ -175,9 +197,13 @@ app/jobs       daily job entrypoints
 frontend/src/api        typed HTTP boundary, error envelope, operation envelope
 frontend/src/auth       session storage, AuthContext, login screen
 frontend/src/components shell, auth gate, feedback, quantity stepper
-frontend/src/customers  list, create, detail/edit
+frontend/src/customers  list, create, detail/edit, the financial view
 frontend/src/daily      the Daily Register
-frontend/src/lib        exact quantity arithmetic, money display, uuidv7
+frontend/src/dashboard  the owner overview
+frontend/src/statements issued statements: list and detail
+frontend/src/payments   manual payment recording (online only)
+frontend/src/costs      operating costs: rates, usage, invoices, scenarios
+frontend/src/lib        exact quantity arithmetic, money display/parsing, uuidv7
 frontend/src/sync       IndexedDB stores, the sync engine, sync status, Needs Attention
 frontend/e2e            Playwright acceptance suite and its fixture server
 ```

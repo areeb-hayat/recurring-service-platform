@@ -40,11 +40,29 @@ class TestP3TablesExist:
             == 1
         )
 
-    def test_the_migration_chain_is_at_the_p3_head(self, engine):
-        assert (
-            _scalar(engine, "SELECT version_num FROM alembic_version")
-            == "0003_p3_commission_engine"
-        )
+    def test_the_p3_migration_is_in_the_applied_chain(self, engine):
+        """P3's revision is an ancestor of whatever the current head is.
+
+        Deliberately not "the head *is* P3" — which is what this asserted until
+        P6 legitimately moved the head and it failed. P2's equivalent test had
+        already got this right and P3's had regressed to pinning; the property
+        worth protecting is that the applied chain still runs *through* P3, so a
+        future migration cannot quietly drop it and leave these tables
+        unexplained. Pinning the head instead just fails on every new package.
+        """
+        import os
+
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cfg = Config(os.path.join(root, "alembic.ini"))
+        cfg.set_main_option("script_location", os.path.join(root, "alembic"))
+        script = ScriptDirectory.from_config(cfg)
+
+        current = _scalar(engine, "SELECT version_num FROM alembic_version")
+        ancestry = {rev.revision for rev in script.walk_revisions("base", current)}
+        assert "0003_p3_commission_engine" in ancestry
 
     def test_P3_adds_exactly_four_tables(self):
         assert len(P3_TABLES) == 4

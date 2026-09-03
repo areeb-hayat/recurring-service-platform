@@ -46,6 +46,7 @@ __all__ = [
     "issue_statements_for_cycle",
     "load_statement",
     "list_statements",
+    "list_all_statements",
     "serialize_statement",
 ]
 
@@ -325,6 +326,40 @@ def list_statements(
                 Statement.customer_id == customer_id,
             )
             .order_by(BillingCycle.period_start.desc())
+        )
+        .scalars()
+        .all()
+    )
+
+
+def list_all_statements(
+    session: Session,
+    ctx: TenantContext,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[Statement]:
+    """Every issued statement for the tenant, newest period first.
+
+    Paged by ``row_version`` as the tiebreaker rather than by period alone: a
+    close issues one statement per customer inside a single period, so period is
+    not a total order and offset paging over it could drop or repeat a row at a
+    page boundary — the same defect the customer list fixed with an id
+    tiebreaker in P4.
+    """
+    limit = max(1, min(limit, 500))
+    return list(
+        session.execute(
+            select(Statement)
+            .join(
+                BillingCycle,
+                (BillingCycle.tenant_id == Statement.tenant_id)
+                & (BillingCycle.id == Statement.cycle_id),
+            )
+            .where(Statement.tenant_id == ctx.tenant_id)
+            .order_by(BillingCycle.period_start.desc(), Statement.row_version.desc())
+            .limit(limit)
+            .offset(offset)
         )
         .scalars()
         .all()

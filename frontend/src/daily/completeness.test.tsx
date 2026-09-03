@@ -26,9 +26,18 @@ import { requests, requestsTo, stub } from "@/test/http";
 
 const DAY_PATH = `/api/v1/service/day/${SETTINGS.business_date}`;
 
-/** The feed head the seed continues from; the seed itself uses the read routes. */
+/**
+ * The feed head the seed continues from; the seed itself uses the read routes.
+ *
+ * P6 added two more of those reads — the tenant's payments and issued
+ * statements, which the new owner screens render — so the seed touches them on
+ * every first sync and they are stubbed empty here. This file is about customer
+ * completeness; the payment and statement seed has its own coverage.
+ */
 function stubFeed() {
   stub("GET", "/api/v1/sync/changes", { body: changesResponse() });
+  stub("GET", "/api/v1/payments", { body: { items: [] } });
+  stub("GET", "/api/v1/statements", { body: { items: [] } });
 }
 
 /** A synthetic page-server that honours `limit` and `offset` like the backend. */

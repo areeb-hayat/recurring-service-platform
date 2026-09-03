@@ -16,7 +16,9 @@ from fastapi.responses import JSONResponse
 from app.api.routes import (
     auth_router,
     billing_router,
+    cost_router,
     customer_router,
+    dashboard_router,
     payment_router,
     platform_commission_router,
     service_router,
@@ -83,6 +85,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(billing_router)
     app.include_router(statement_router)
     app.include_router(payment_router)
+    app.include_router(dashboard_router)
+    app.include_router(cost_router)
     app.include_router(sync_router)
     app.include_router(platform_commission_router)
     return app

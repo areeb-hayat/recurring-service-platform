@@ -8,6 +8,7 @@ import type { Customer, OperationResult } from "@/api/types";
 import { ErrorNotice, Loading } from "@/components/Feedback";
 import { formatMoney } from "@/lib/money";
 import { usePendingOperation } from "@/daily/usePendingOperation";
+import { CustomerFinancials } from "./CustomerFinancials";
 import {
   CustomerForm,
   majorToMinor,
@@ -22,6 +23,11 @@ import {
  * derived them (FIN-4 / FIN-11). Nothing on this page adds anything up, and
  * there is no delete: accepted financial history has no hard-delete path
  * (AUD-1), so a customer who has left is marked Inactive and stays.
+ *
+ * P6 added the financial view below the details — payments, issued statements
+ * and delivery history, each a server-authoritative list. The balance at the top
+ * and the movements underneath come from the same ledger, read twice by the
+ * server, never reconciled by the client.
  */
 export function CustomerDetailPage() {
   const { customerId = "" } = useParams();
@@ -156,6 +162,10 @@ export function CustomerDetailPage() {
         />
         <Row label="Payment status" value={humanStatus(customer.payment_status)} />
       </dl>
+
+      {/* The financial view: the server's balance above, and the documents and
+          movements behind it. Nothing here re-derives the number. */}
+      <CustomerFinancials customer={customer} />
 
       <button className="btn btn-quiet" type="button" onClick={() => navigate("/customers")}>
         Back to customers

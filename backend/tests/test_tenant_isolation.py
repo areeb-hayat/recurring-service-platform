@@ -539,6 +539,210 @@ class TestSEC3OperationIdIsTenantScoped:
             assert outcome.status == "APPLIED"
 
 
+class TestP6TenantIsolation:
+    """SEC-3/SEC-4 over everything P6 added.
+
+    Two halves, and they fail in two different correct ways. The *financial*
+    reads are addressed by a customer or statement id, so a foreign id is a 404
+    (SEC-4: existence is not disclosed). The *aggregate* reads name nothing at
+    all — they answer for "my tenant" — so the assertion there is that tenant B's
+    answer contains none of tenant A's business, which is the only way a summary
+    endpoint can leak.
+    """
+
+    @pytest.fixture
+    def a_cost_item(self, client, tenant_a):
+        body = {
+            "operation_id": str(uuid7()),
+            "code": "HOSTING",
+            "name": "App hosting and database",
+        }
+        resp = client.post(
+            "/api/v1/operating-costs/items", json=body, headers=tenant_a.auth
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["entity"]
+
+    # --- customer-addressed reads: a foreign id is 404 ------------------------
+
+    def test_SEC4_cannot_read_other_tenants_payment_history(
+        self, client, tenant_a, tenant_b, a_customer
+    ):
+        resp = client.get(
+            f"/api/v1/customers/{a_customer['id']}/payments", headers=tenant_b.auth
+        )
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "NOT_FOUND"
+
+    def test_SEC4_cannot_read_other_tenants_service_history(
+        self, client, tenant_a, tenant_b, a_customer
+    ):
+        resp = client.get(
+            f"/api/v1/customers/{a_customer['id']}/history", headers=tenant_b.auth
+        )
+        assert resp.status_code == 404
+
+    # --- tenant-wide reads: the other tenant's rows are simply not there ------
+
+    def test_SEC3_payment_list_holds_only_the_callers_tenant(
+        self, client, tenant_a, tenant_b, a_payment
+    ):
+        mine = client.get("/api/v1/payments", headers=tenant_a.auth)
+        theirs = client.get("/api/v1/payments", headers=tenant_b.auth)
+        assert mine.status_code == 200 and theirs.status_code == 200
+        assert [p["id"] for p in mine.json()["items"]] == [a_payment["id"]]
+        assert theirs.json()["items"] == []
+
+    def test_SEC3_statement_list_holds_only_the_callers_tenant(
+        self, client, tenant_a, tenant_b, a_record
+    ):
+        resp = client.get("/api/v1/statements", headers=tenant_b.auth)
+        assert resp.status_code == 200
+        assert resp.json()["items"] == []
+
+    def test_SEC3_dashboard_reports_only_the_callers_tenant(
+        self, client, tenant_a, tenant_b, a_record, a_payment
+    ):
+        mine = client.get("/api/v1/dashboard/summary", headers=tenant_a.auth).json()
+        theirs = client.get("/api/v1/dashboard/summary", headers=tenant_b.auth).json()
+
+        assert mine["all_time"]["business_generated_minor"] > 0
+        assert mine["customers"]["total"] == 1
+        assert mine["recent_payments"], "tenant A recorded a payment"
+
+        # Tenant B has none of it, and cannot see a single figure of A's.
+        assert theirs["all_time"] == {
+            "business_generated_minor": 0,
+            "billed_value_minor": 0,
+            "collected_minor": 0,
+            "outstanding_minor": 0,
+        }
+        assert theirs["customers"]["total"] == 0
+        assert theirs["recent_payments"] == []
+
+    def test_SEC3_outstanding_list_reports_only_the_callers_tenant(
+        self, client, tenant_a, tenant_b, a_record
+    ):
+        mine = client.get("/api/v1/dashboard/outstanding", headers=tenant_a.auth).json()
+        theirs = client.get(
+            "/api/v1/dashboard/outstanding", headers=tenant_b.auth
+        ).json()
+        assert len(mine["items"]) == 1
+        assert theirs["items"] == []
+
+    # --- operating costs ------------------------------------------------------
+
+    def test_SEC4_cannot_add_a_rate_to_other_tenants_cost_item(
+        self, client, tenant_a, tenant_b, a_cost_item
+    ):
+        resp = client.post(
+            f"/api/v1/operating-costs/items/{a_cost_item['id']}/rates",
+            json={
+                "operation_id": str(uuid7()),
+                "effective_from": "2026-01-01",
+                "fixed_amount_minor": 1000,
+                "fixed_recurrence": "MONTHLY",
+            },
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == "NOT_FOUND"
+
+    def test_SEC4_cannot_record_usage_against_other_tenants_cost_item(
+        self, client, tenant_a, tenant_b, a_cost_item
+    ):
+        resp = client.post(
+            "/api/v1/operating-costs/usage",
+            json={
+                "operation_id": str(uuid7()),
+                "cost_item_id": a_cost_item["id"],
+                "period_month": "2026-03-01",
+                "usage_quantity": "1",
+            },
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 404
+
+    def test_SEC4_cannot_record_an_invoice_against_other_tenants_cost_item(
+        self, client, tenant_a, tenant_b, a_cost_item
+    ):
+        resp = client.post(
+            "/api/v1/operating-costs/actuals",
+            json={
+                "operation_id": str(uuid7()),
+                "cost_item_id": a_cost_item["id"],
+                "period_month": "2026-03-01",
+                "amount_minor": 500,
+            },
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 404
+
+    def test_SEC4_cannot_price_a_scenario_against_other_tenants_cost_item(
+        self, client, tenant_a, tenant_b, a_cost_item
+    ):
+        resp = client.post(
+            "/api/v1/operating-costs/scenarios",
+            json={
+                "scenarios": [
+                    {"cost_item_id": a_cost_item["id"], "usage_quantity": "10"}
+                ]
+            },
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 404
+
+    def test_SEC3_cost_reads_hold_only_the_callers_tenant(
+        self, client, tenant_a, tenant_b, a_cost_item
+    ):
+        mine = client.get("/api/v1/operating-costs/items", headers=tenant_a.auth).json()
+        theirs = client.get(
+            "/api/v1/operating-costs/items", headers=tenant_b.auth
+        ).json()
+        assert [i["code"] for i in mine["items"]] == ["HOSTING"]
+        assert theirs["items"] == []
+
+        summary_b = client.get(
+            "/api/v1/operating-costs/summary", headers=tenant_b.auth
+        ).json()
+        assert summary_b["lines"] == [] and summary_b["totals"] == []
+
+    def test_SEC6_platform_principal_is_refused_on_every_p6_route(
+        self, client, platform_token
+    ):
+        """SEC-6 from the other side: platform scope has no tenant business."""
+        headers = {"Authorization": f"Bearer {platform_token}"}
+        for method, path in (
+            ("GET", "/api/v1/dashboard/summary"),
+            ("GET", "/api/v1/dashboard/outstanding"),
+            ("GET", "/api/v1/payments"),
+            ("GET", "/api/v1/statements"),
+            ("GET", "/api/v1/operating-costs/items"),
+            ("GET", "/api/v1/operating-costs/summary"),
+            ("GET", "/api/v1/operating-costs/history"),
+        ):
+            resp = client.request(method, path, headers=headers)
+            assert resp.status_code == 403, f"{method} {path} -> {resp.status_code}"
+
+    def test_SEC5_cost_capabilities_are_not_commission_capabilities(self):
+        """Operating costs and platform commission share no authority at all.
+
+        The point of giving costs their own capability rather than reusing an
+        existing one: an owner-admin can record what the business pays its
+        providers and still cannot read a single commission row, and a platform
+        principal's commission authority reaches none of these routes.
+        """
+        from app.identity.capabilities import (
+            PLATFORM_CAPABILITIES,
+            TENANT_CAPABILITIES,
+        )
+
+        cost = {c for c in TENANT_CAPABILITIES if c.startswith("cost:")}
+        assert cost == {"cost:read", "cost:write"}
+        assert cost & PLATFORM_CAPABILITIES == set()
+        assert {c for c in TENANT_CAPABILITIES if c.startswith("commission:")} == set()
+
+
 class TestRouteInventory:
     """A-SEC-3/4: the mechanism notices new scoped routes automatically."""
 
@@ -560,6 +764,21 @@ class TestRouteInventory:
         ("POST", "/api/v1/payments/{payment_id}/void"),
         ("POST", "/api/v1/sync/operations"),
         ("GET", "/api/v1/sync/changes"),
+        # P6
+        ("GET", "/api/v1/customers/{customer_id}/payments"),
+        ("GET", "/api/v1/customers/{customer_id}/history"),
+        ("GET", "/api/v1/statements"),
+        ("GET", "/api/v1/payments"),
+        ("GET", "/api/v1/dashboard/summary"),
+        ("GET", "/api/v1/dashboard/outstanding"),
+        ("GET", "/api/v1/operating-costs/items"),
+        ("POST", "/api/v1/operating-costs/items"),
+        ("POST", "/api/v1/operating-costs/items/{cost_item_id}/rates"),
+        ("POST", "/api/v1/operating-costs/usage"),
+        ("POST", "/api/v1/operating-costs/actuals"),
+        ("GET", "/api/v1/operating-costs/summary"),
+        ("GET", "/api/v1/operating-costs/history"),
+        ("POST", "/api/v1/operating-costs/scenarios"),
     }
 
     PLATFORM_EXERCISED = {

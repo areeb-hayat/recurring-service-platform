@@ -30,6 +30,11 @@ __all__ = [
     "CloseCycleRequest",
     "RecordPaymentRequest",
     "VoidPaymentRequest",
+    "CreateCostItemRequest",
+    "CreateCostRateRequest",
+    "RecordCostUsageRequest",
+    "RecordCostActualRequest",
+    "CostScenarioRequest",
     "CreateCommissionPlanRequest",
     "RecordCommissionSettlementRequest",
     "SyncOperationEnvelope",
@@ -164,6 +169,105 @@ class RecordPaymentRequest(_Base):
 class VoidPaymentRequest(_Base):
     operation_id: uuid.UUID
     reason: NonEmptyStr  # AUD-6
+
+
+# --- operating costs (P6) ----------------------------------------------------
+#
+# What the business pays its *providers*. Tenant scope, and structurally apart
+# from the commission models below: different capabilities, different tables,
+# different totals. Money is integer minor units here too (FIN-1), and a usage
+# quantity crosses as a **string** for exactly the reason a service quantity
+# does — a JSON float cannot represent 0.1 and must never touch an amount.
+
+
+CostCode = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
+CurrencyCode = Annotated[
+    str, StringConstraints(strip_whitespace=True, to_upper=True, min_length=3, max_length=3)
+]
+#: Up to six decimal places: audio hours and GB-months are measured, not billed.
+UsageQtyStr = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, pattern=r"^\d{1,12}(\.\d{1,6})?$"),
+]
+
+
+class CreateCostItemRequest(_Base):
+    operation_id: uuid.UUID
+    code: CostCode
+    name: NonEmptyStr
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class CreateCostRateRequest(_Base):
+    """A new versioned rate. Exactly one pricing shape, checked in the domain.
+
+    ``effective_to`` is deliberately absent: a rate is open-ended and is closed
+    by its successor, so no request can leave a gap with no rate in force.
+    """
+
+    operation_id: uuid.UUID
+    effective_from: date
+    unit: str | None = Field(default=None, max_length=40)
+    unit_price_minor: int | None = Field(default=None, ge=0)
+    fixed_amount_minor: int | None = Field(default=None, ge=0)
+    fixed_recurrence: Literal["MONTHLY", "ANNUAL"] | None = None
+    # Omit for the tenant's own currency. A provider that bills in another one
+    # keeps it: V1 converts nothing (P6 §18).
+    currency: CurrencyCode | None = None
+    currency_exponent: int | None = Field(default=None, ge=0, le=4)
+    source_note: str | None = Field(default=None, max_length=1000)
+
+
+class RecordCostUsageRequest(_Base):
+    operation_id: uuid.UUID
+    cost_item_id: uuid.UUID
+    period_month: date
+    usage_quantity: UsageQtyStr
+    #: The working behind the figure — e.g. how many events a day at how many
+    #: seconds each. Kept so a number can be explained a year later.
+    inputs: dict[str, Any] | None = None
+    note: str | None = Field(default=None, max_length=1000)
+    #: Required only when replacing a month that already has a figure (AUD-6).
+    correction_reason: NonEmptyStr | None = None
+
+
+class RecordCostActualRequest(_Base):
+    operation_id: uuid.UUID
+    cost_item_id: uuid.UUID
+    period_month: date
+    # Zero is legal (a bundled first year really is free); negative is not.
+    amount_minor: int = Field(ge=0)
+    currency: CurrencyCode | None = None
+    currency_exponent: int | None = Field(default=None, ge=0, le=4)
+    invoice_reference: str | None = Field(default=None, max_length=120)
+    note: str | None = Field(default=None, max_length=1000)
+    correction_reason: NonEmptyStr | None = None
+
+
+class CostScenarioEntry(_Base):
+    """One "what if we used this much?" case.
+
+    Either a usage quantity directly, or the events/seconds/days triple that
+    converts to hours. The conversion is arithmetic; the price it meets is a
+    configured rate.
+    """
+
+    label: str | None = Field(default=None, max_length=60)
+    cost_item_id: uuid.UUID
+    usage_quantity: UsageQtyStr | None = None
+    events_per_day: int | None = Field(default=None, ge=0, le=10_000_000)
+    seconds_per_event: UsageQtyStr | None = None
+    days: int | None = Field(default=None, ge=1, le=366)
+
+
+class CostScenarioRequest(_Base):
+    """Planning only. Writes nothing, and carries no ``operation_id`` because
+    there is no effect to make idempotent."""
+
+    period_month: date | None = None
+    scenarios: list[CostScenarioEntry] = Field(min_length=1, max_length=20)
 
 
 # --- platform commission (P0 §11; platform scope only) -----------------------

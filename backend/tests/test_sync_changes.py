@@ -98,12 +98,42 @@ class TestShape:
         )
         assert change["data"] == entity
 
-    def test_no_ledger_payment_or_statement_entity_is_exposed(self, client, tenant_a):
-        """P5's snapshot holds what the register renders. Money rows are not on it."""
+    def test_payment_and_statement_are_carried_from_p6(self, client, tenant_a):
+        """P6 admitted them, because P6 builds the screens that render them.
+
+        P5 withheld both on the grounds that streaming financial rows to a device
+        with nothing to show them invites a client-side total (SYN-9). The
+        customer financial view, the statement list and the payment history are
+        that screen, and every figure they show is one the server computed.
+        """
+        body = feed(client, tenant_a)
+        assert "payment" in body["entities"]
+        assert "statement" in body["entities"]
+
+    def test_no_ledger_entity_is_exposed(self, client, tenant_a):
+        """`ledger_entry` is still absent, and not by oversight.
+
+        Nothing renders a raw ledger row: a statement *is* the presentation of a
+        cycle's entries and a balance is derived server-side. Shipping the
+        entries would put the one dataset a client could plausibly re-total onto
+        the device for no screen at all.
+        """
         body = feed(client, tenant_a)
         assert "ledger_entry" not in body["entities"]
-        assert "payment" not in body["entities"]
-        assert "statement" not in body["entities"]
+
+    def test_the_feed_version_was_bumped_for_the_new_entities(self, client, tenant_a):
+        """Admitting an entity is only safe with a version bump.
+
+        A device already past a payment's `row_version` would otherwise never
+        receive it: the feed only ever hands over rows *above* the cursor. A
+        different `feed_version` is the client's instruction to discard its
+        cursor and resynchronise from zero, which is the only way those older
+        rows can arrive.
+        """
+        from app.sync.changes import SYNC_FEED_VERSION
+
+        assert SYNC_FEED_VERSION == 2, "P6 raised it from P5's 1"
+        assert feed(client, tenant_a)["feed_version"] == SYNC_FEED_VERSION
 
 
 class TestHead:

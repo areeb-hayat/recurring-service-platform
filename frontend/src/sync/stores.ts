@@ -35,6 +35,7 @@ const META_DEFAULTS: MetaShape = {
   business_date: null,
   next_seq: 1,
   tenant_id: null,
+  dashboard_read_at: null,
 };
 
 // --- meta -------------------------------------------------------------------
@@ -262,7 +263,14 @@ export interface SnapshotWrite {
  * for a `row_version` bump would leave a device believing in yesterday while it
  * is online. One writer for that row, and it is the direct read.
  */
-const FEED_ENTITIES: readonly string[] = ["customer", "daily_service_record"];
+const FEED_ENTITIES: readonly string[] = [
+  "customer",
+  "daily_service_record",
+  // P6. Financial history the owner's screens render — and only render: every
+  // figure on them is one the server computed (SYN-9).
+  "payment",
+  "statement",
+];
 
 function toWrite(change: SyncChange): SnapshotWrite | null {
   if (!FEED_ENTITIES.includes(change.entity)) return null;
@@ -330,6 +338,36 @@ export async function applyChanges(
 }
 
 /**
+ * Store one server-computed document under its own key.
+ *
+ * Used for the dashboard summary: not a feed entity, but a server-authoritative
+ * read the device keeps so that opening the dashboard offline shows the last
+ * known figures with an "as of" stamp instead of nothing. It is written
+ * verbatim — the client never recomputes any part of it.
+ */
+export async function writeSnapshotDoc(
+  db: SyncDatabase,
+  entity: SnapshotEntity,
+  id: string,
+  data: unknown,
+  extraMeta: Partial<MetaShape> = {},
+): Promise<void> {
+  const tx = db.transaction(["snapshot", "meta"], "readwrite");
+  await tx.objectStore("snapshot").put({
+    key: snapshotKey(entity, id),
+    entity,
+    id,
+    row_version: 0,
+    data,
+  });
+  const meta = tx.objectStore("meta");
+  for (const [key, value] of Object.entries(extraMeta)) {
+    await meta.put({ key, value: value as MetaShape[MetaKey] });
+  }
+  await tx.done;
+}
+
+/**
  * Write the tenant's configuration and the meta that goes with it, atomically.
  *
  * Unconditional: this row has one writer, and what it writes is always the most
@@ -377,6 +415,12 @@ export async function seedSnapshot(
 }
 
 /** Drop stored service records the retention rule no longer keeps.
+
+Service records only. `payment` and `statement` are deliberately **not** pruned:
+they are not a rolling day-view, they are the financial history the customer and
+statement screens render, and dropping older ones would invent a retention
+horizon nobody chose (the defect D6 removed in P5). They are also far fewer —
+one statement per customer per cycle, and one row per payment.
 
 Snapshot-only: it touches neither `outbox` nor `issues`, which are not caches.
 Unresolved work is never collateral of a cache cleanup. */

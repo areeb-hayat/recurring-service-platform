@@ -81,6 +81,12 @@ FEED_WRITING_OP_TYPES: frozenset[str] = frozenset(
         "service.skip",
         "service.correct",
         "service.void",
+        # P6: payment and statement joined SYNC_ENTITIES.
+        "payment.record",
+        "payment.void",
+        # Issues one immutable statement per billable customer, each with its own
+        # row_version, inside the close transaction.
+        "billing.close_cycle",
     }
 )
 

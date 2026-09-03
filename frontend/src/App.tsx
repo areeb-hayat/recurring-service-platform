@@ -8,16 +8,23 @@ import { CustomerCreatePage } from "@/customers/CustomerCreatePage";
 import { CustomerDetailPage } from "@/customers/CustomerDetailPage";
 import { CustomerListPage } from "@/customers/CustomerListPage";
 import { DailyRegisterPage } from "@/daily/DailyRegisterPage";
+import { DashboardPage } from "@/dashboard/DashboardPage";
+import { OperatingCostsPage } from "@/costs/OperatingCostsPage";
+import { RecordPaymentPage } from "@/payments/RecordPaymentPage";
+import { StatementsPage } from "@/statements/StatementsPage";
 import { IssuesPage } from "@/sync/IssuesPage";
 
 /**
- * Four screens and a login.
+ * The screens, and a login.
  *
- * `/today` is the landing route because the daily round is the reason this app
- * is opened. `/attention` is P5's addition: the durable home of operations the
- * server refused, which must outlive the sync that produced them. Payments,
- * statements, corrections, reminders, dashboards and the platform surface are
- * not routed here: their packages have not run.
+ * `/today` stays the landing route: the daily round is still the reason this app
+ * is opened, and the owner's numbers are something you go and look at rather
+ * than something you are shown while standing at a door. `/attention` is P5's
+ * durable home for operations the server refused.
+ *
+ * P6 adds the owner-facing half — the overview, issued statements, recording a
+ * payment, and what the business pays its own providers. Reminders, search,
+ * voice and the platform surface are still absent: their packages have not run.
  */
 export function App() {
   const { session } = useAuth();
@@ -36,9 +43,13 @@ export function App() {
         }
       >
         <Route path="/today" element={<DailyRegisterPage />} />
+        <Route path="/overview" element={<DashboardPage />} />
         <Route path="/customers" element={<CustomerListPage />} />
         <Route path="/customers/new" element={<CustomerCreatePage />} />
         <Route path="/customers/:customerId" element={<CustomerDetailPage />} />
+        <Route path="/customers/:customerId/pay" element={<RecordPaymentPage />} />
+        <Route path="/statements" element={<StatementsPage />} />
+        <Route path="/operating-costs" element={<OperatingCostsPage />} />
         <Route path="/attention" element={<IssuesPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/today" replace />} />

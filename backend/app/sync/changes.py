@@ -21,16 +21,27 @@ identity (SYN-10: a superset, never a gap).
 update and arrives as an ordinary change. So the feed has no tombstone concept
 and needs none.
 
-**Entity scope.** ``SYNC_ENTITIES`` is what the V1 client actually stores
-offline: the tenant's own configuration, its customers, and its daily service
-records — exactly the reads the Daily Register is built from. ``payment``,
-``statement`` and ``ledger_entry`` carry ``row_version`` too and will join this
-list in the package that builds a screen for them; streaming them now would put
-financial rows on devices with nothing to render them and every temptation to
-add them up (SYN-9). ``SYNC_FEED_VERSION`` exists so that admitting one is safe:
-a client whose stored feed version differs discards its cursor and resynchronises
-from zero, which is the only way a newly added entity's *older* rows can reach a
-device that is already past them.
+**Entity scope.** ``SYNC_ENTITIES`` is what the client actually stores offline:
+the tenant's own configuration, its customers, its daily service records — and,
+from P6, its ``payment`` and ``statement`` rows, because P6 is the package that
+builds the screens that render them. P5 deliberately withheld those two until a
+screen existed, on the grounds that streaming financial rows to a device with
+nothing to show them invites somebody to add them up (SYN-9); the customer
+financial view, the statement list and the payment history are that screen, and
+they display server-computed figures verbatim.
+
+``ledger_entry`` is still **absent**, and not by oversight. Nothing renders a raw
+ledger row: a statement is the presentation of one cycle's entries and the
+customer balance is derived server-side, so shipping the entries themselves would
+put the one dataset a client could plausibly re-total onto the device for no
+screen at all.
+
+``SYNC_FEED_VERSION`` is what makes admitting an entity safe: a client whose
+stored feed version differs discards its cursor and resynchronises from zero,
+which is the only way a newly added entity's *older* rows can reach a device
+already past them. It is bumped to 2 by this change. That resync clears the
+snapshot only — the outbox and the issues store are not caches and are never
+touched.
 
 Commission never appears here at any version. Those tables carry no
 ``row_version`` at all (P0 §6, COM-8), so there is no mechanism by which a tenant
@@ -44,8 +55,12 @@ from typing import Any, Callable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.billing.models import Statement
+from app.billing.statements import serialize_statement
 from app.customers.commands import serialize_customer
 from app.customers.models import Customer
+from app.payments.commands import serialize_payment
+from app.payments.models import Payment
 from app.service.commands import serialize_record
 from app.service.models import DailyServiceRecord
 from app.tenancy.context import TenantContext
@@ -62,10 +77,18 @@ __all__ = [
 ]
 
 # Bump whenever SYNC_ENTITIES changes. Clients treat a different value as
-# "resynchronise from zero".
-SYNC_FEED_VERSION = 1
+# "resynchronise from zero". P6 raised it from 1 to 2 when ``payment`` and
+# ``statement`` joined: without the bump, a device already past those rows'
+# versions would never receive them.
+SYNC_FEED_VERSION = 2
 
-SYNC_ENTITIES: tuple[str, ...] = ("tenant", "customer", "daily_service_record")
+SYNC_ENTITIES: tuple[str, ...] = (
+    "tenant",
+    "customer",
+    "daily_service_record",
+    "payment",
+    "statement",
+)
 
 DEFAULT_PAGE_LIMIT = 500
 MAX_PAGE_LIMIT = 1000
@@ -117,12 +140,53 @@ def _service_record_rows(
     return [(r.row_version, str(r.id), serialize_record(r, ctx)) for r in rows]
 
 
+def _payment_rows(
+    session: Session, ctx: TenantContext, since: int, limit: int
+) -> list[tuple[int, str, dict[str, Any]]]:
+    """Payments, RECORDED and VOIDED alike.
+
+    A void advances the payment's own ``row_version`` (P0 §7.1, §7.4), so the
+    transition arrives as an ordinary update — there is no tombstone and none is
+    needed, because nothing is deleted (FIN-12, AUD-7).
+    """
+    rows = (
+        session.execute(
+            select(Payment)
+            .where(Payment.tenant_id == ctx.tenant_id, Payment.row_version > since)
+            .order_by(Payment.row_version)
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    return [(r.row_version, str(r.id), serialize_payment(r, ctx)) for r in rows]
+
+
+def _statement_rows(
+    session: Session, ctx: TenantContext, since: int, limit: int
+) -> list[tuple[int, str, dict[str, Any]]]:
+    """Issued statements. Immutable (FIN-8), so each appears exactly once."""
+    rows = (
+        session.execute(
+            select(Statement)
+            .where(Statement.tenant_id == ctx.tenant_id, Statement.row_version > since)
+            .order_by(Statement.row_version)
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    return [(r.row_version, str(r.id), serialize_statement(r, ctx)) for r in rows]
+
+
 _READERS: dict[
     str, Callable[[Session, TenantContext, int, int], list[tuple[int, str, dict[str, Any]]]]
 ] = {
     "tenant": _tenant_rows,
     "customer": _customer_rows,
     "daily_service_record": _service_record_rows,
+    "payment": _payment_rows,
+    "statement": _statement_rows,
 }
 
 
@@ -150,6 +214,14 @@ def current_head(session: Session, ctx: TenantContext) -> int:
         session.execute(
             select(func.max(DailyServiceRecord.row_version)).where(
                 DailyServiceRecord.tenant_id == ctx.tenant_id
+            )
+        ).scalar(),
+        session.execute(
+            select(func.max(Payment.row_version)).where(Payment.tenant_id == ctx.tenant_id)
+        ).scalar(),
+        session.execute(
+            select(func.max(Statement.row_version)).where(
+                Statement.tenant_id == ctx.tenant_id
             )
         ).scalar(),
     ]

@@ -43,6 +43,7 @@ __all__ = [
     "void_payment",
     "load_payment",
     "list_payments",
+    "list_all_payments",
     "serialize_payment",
 ]
 
@@ -96,6 +97,33 @@ def list_payments(
             select(Payment)
             .where(Payment.tenant_id == ctx.tenant_id, Payment.customer_id == customer_id)
             .order_by(Payment.received_on, Payment.recorded_at)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def list_all_payments(
+    session: Session,
+    ctx: TenantContext,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[Payment]:
+    """Every payment for the tenant, most recent first, voided rows included.
+
+    Ordered by ``row_version`` after the receipt date: it comes from one shared
+    sequence and is unique across the table, so the order is total and offset
+    paging cannot drop or repeat a row where two payments share a date.
+    """
+    limit = max(1, min(limit, 500))
+    return list(
+        session.execute(
+            select(Payment)
+            .where(Payment.tenant_id == ctx.tenant_id)
+            .order_by(Payment.received_on.desc(), Payment.row_version.desc())
+            .limit(limit)
+            .offset(offset)
         )
         .scalars()
         .all()

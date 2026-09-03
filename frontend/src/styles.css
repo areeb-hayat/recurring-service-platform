@@ -601,3 +601,255 @@ h2 {
   font-size: 1.15rem;
   font-weight: 650;
 }
+
+/* --- P6: the owner's financial screens ------------------------------------ */
+
+/* Headline figures. A grid rather than a table so a phone gets one column and a
+   desktop gets four without a horizontal scroll — P6 §20: no giant tables on a
+   phone. */
+.stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 600px) {
+  .stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* The number the owner opened the app to see. */
+.stat-emphasis {
+  border-color: var(--accent);
+}
+
+.stat-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-hint {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.day-sub {
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+/* --- generic money list --------------------------------------------------- */
+
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.list-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  color: inherit;
+  text-decoration: none;
+}
+
+/* A row that opens something is a real button, so it is reachable by keyboard
+   and announces its expanded state. */
+.list-button {
+  font: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-title {
+  font-weight: 620;
+}
+
+.list-sub {
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+}
+
+.amount {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A credit is money held, not owed — and a reversed payment is not a payment.
+   Both read differently at a glance rather than only in the small print. */
+.amount-credit {
+  color: var(--success);
+}
+
+.amount-void {
+  color: var(--ink-soft);
+  text-decoration: line-through;
+}
+
+.quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* --- statements ----------------------------------------------------------- */
+
+.statement-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-total {
+  border-top: 2px solid var(--line);
+  font-weight: 700;
+}
+
+/* --- payment form --------------------------------------------------------- */
+
+.amount-input {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+fieldset.field {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+fieldset.field > legend {
+  font-weight: 600;
+  padding: 0 0 6px;
+}
+
+.field-message {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+}
+
+.field-message[role="alert"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* --- operating costs ------------------------------------------------------ */
+
+/* Stacked on a phone, one row per provider on a wider screen. The three
+   figures stay side by side either way: estimated, invoiced and the difference
+   only mean anything read together. */
+.cost-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.cost-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.figure-label {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.figure-value {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scenario-inputs {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 600px) {
+  .scenario-inputs {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

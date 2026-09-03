@@ -38,6 +38,17 @@ class AuditAction:
     COMMISSION_PLAN_CREATED = "commission_plan.created"
     COMMISSION_PLAN_CLOSED = "commission_plan.closed"
     COMMISSION_SETTLEMENT_RECORDED = "commission_settlement.recorded"
+    # P6 operating costs. Tenant-scope actions on what the business pays its
+    # providers -- deliberately named apart from the commission actions above,
+    # because the two are different accounting concepts and an audit reader
+    # must never have to guess which one a row describes.
+    OPERATING_COST_ITEM_CREATED = "operating_cost_item.created"
+    OPERATING_COST_RATE_CREATED = "operating_cost_rate.created"
+    OPERATING_COST_RATE_CLOSED = "operating_cost_rate.closed"
+    OPERATING_COST_USAGE_RECORDED = "operating_cost_usage.recorded"
+    OPERATING_COST_USAGE_CORRECTED = "operating_cost_usage.corrected"
+    OPERATING_COST_ACTUAL_RECORDED = "operating_cost_actual.recorded"
+    OPERATING_COST_ACTUAL_CORRECTED = "operating_cost_actual.corrected"
     AUTH_LOGIN_SUCCEEDED = "auth.login_succeeded"
     AUTH_LOGIN_FAILED = "auth.login_failed"
     AUTH_TOKEN_REFRESHED = "auth.token_refreshed"

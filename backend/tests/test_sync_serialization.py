@@ -273,6 +273,22 @@ class TestRollbackReleases:
 class TestTheRuleIsDiscoverable:
     """The one thing a later package has to get right."""
 
+    #: Which module actually allocates a ``row_version`` for each feed entity,
+    #: and the op types that reach it. This mapping is the whole contract: it is
+    #: what a later package has to extend, and what this file exists to pin.
+    ENTITY_WRITERS = {
+        "customer": ("customers/commands.py", {"customer.create", "customer.update"}),
+        "daily_service_record": (
+            "service/commands.py",
+            {"service.record", "service.skip", "service.correct", "service.void"},
+        ),
+        # P6. A payment draws a version on insert and advances it on the
+        # RECORDED -> VOIDED transition; a statement draws one at issue, which
+        # happens only inside a cycle close.
+        "payment": ("payments/commands.py", {"payment.record", "payment.void"}),
+        "statement": ("billing/statements.py", {"billing.close_cycle"}),
+    }
+
     def test_every_feed_entity_has_a_registered_writing_op_type(self):
         """`SYNC_ENTITIES` and `FEED_WRITING_OP_TYPES` must not drift apart.
 
@@ -282,40 +298,60 @@ class TestTheRuleIsDiscoverable:
         """
         from app.sync.changes import SYNC_ENTITIES
 
-        prefixes = {op.split(".")[0] for op in FEED_WRITING_OP_TYPES}
-        assert prefixes == {"customer", "service"}
-        assert set(SYNC_ENTITIES) == {"tenant", "customer", "daily_service_record"}
+        covered = set(self.ENTITY_WRITERS) | {"tenant"}
+        assert set(SYNC_ENTITIES) == covered, (
+            "a feed entity has no registered writing op type (or vice versa) — "
+            "see app/sync/serialization.py"
+        )
 
     def test_the_feed_writing_operations_are_the_ones_that_bump_a_feed_row_version(self):
         """Every command that writes a feed entity is registered.
 
-        Enumerated from the source rather than asserted by hand, so a new
-        mutation path on `customer` or `daily_service_record` cannot be added
-        without either registering its op type or failing here.
+        The writing module for each entity is named and checked to contain the
+        allocation, so a new mutation path cannot be added to one of them without
+        either registering its op type or failing here.
         """
         from tests._source import APP_ROOT
 
-        writing_modules = ("customers/commands.py", "service/commands.py")
-        for relative in writing_modules:
+        expected: set[str] = set()
+        for relative, ops in self.ENTITY_WRITERS.values():
             source = (APP_ROOT / relative).read_text(encoding="utf-8")
             assert "next_row_version(session)" in source, relative
+            expected |= ops
 
-        # Each of those modules' public commands is driven by exactly these ops.
-        assert FEED_WRITING_OP_TYPES == {
-            "customer.create",
-            "customer.update",
-            "service.record",
-            "service.skip",
-            "service.correct",
-            "service.void",
-        }
+        assert FEED_WRITING_OP_TYPES == expected
 
     def test_operations_outside_the_feed_do_not_take_the_lock(self):
-        """Payments and statements are not feed entities in P5, so they do not
-        serialize on it. Adding them here without adding them to the feed would
-        only make writes wait for nothing."""
-        for op in ("payment.record", "payment.void", "billing.close_cycle"):
+        """The lock is for feed writers only.
+
+        `ledger_entry` is not a feed entity, and no op type is registered on its
+        behalf: registering one without adding the entity to the feed would make
+        writes wait for nothing. Commission never appears at any version — those
+        tables carry no `row_version` at all.
+        """
+        from app.sync.changes import SYNC_ENTITIES
+
+        assert "ledger_entry" not in SYNC_ENTITIES
+        for op in (
+            "commission.plan.create",
+            "commission.settlement.record",
+            "cost.item.create",
+            "cost.rate.create",
+            "cost.usage.record",
+            "cost.actual.record",
+        ):
             assert op not in FEED_WRITING_OP_TYPES
+
+    def test_payment_and_statement_writes_now_take_the_boundary(self):
+        """P6's own half of the rule (SYN-10).
+
+        Without these three, the D4 commit-order gap reopens for exactly the rows
+        P6 added: a payment allocating early and committing late, behind a
+        service record that commits first, is the same race — on financial
+        history this time.
+        """
+        for op in ("payment.record", "payment.void", "billing.close_cycle"):
+            assert op in FEED_WRITING_OP_TYPES
 
 
 class TestTheBoundaryIsWiredIntoRealOperations:

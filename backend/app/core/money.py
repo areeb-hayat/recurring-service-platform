@@ -10,7 +10,7 @@ The frozen financial representation (P0 §5.1, §5.2):
   once, here, at the daily service record. Nothing downstream re-rounds.
 * ``commission_minor = round_half_up(base_amount_minor * rate_bp / 10000)`` — the
   same half-up rule at the commission-event level (P0 §5.2, COM-9). It shares
-  :func:`_round_half_up` with the charge rule rather than repeating it, so there
+  :func:`round_half_up` with the charge rule rather than repeating it, so there
   is exactly one rounding implementation in the system.
 
 Invariants: FIN-1, FIN-2, FIN-3, COM-9.
@@ -30,6 +30,8 @@ __all__ = [
     "compute_charge_minor",
     "validate_rate_bp",
     "apply_rate_bp",
+    "round_half_up",
+    "multiply_minor",
 ]
 
 QUANTITY_SCALE = 3
@@ -69,7 +71,7 @@ def _reject_float(value: object, error: type[ValueError], field: str) -> None:
         )
 
 
-def _round_half_up(value: Decimal) -> int:
+def round_half_up(value: Decimal) -> int:
     """The one rounding implementation in the system (P0 §5.2).
 
     Half-up and symmetric about zero: ``Decimal.quantize(ROUND_HALF_UP)`` rounds
@@ -86,6 +88,35 @@ def _round_half_up(value: Decimal) -> int:
     result = int(rounded)
     assert isinstance(result, int)  # FIN-1: this boundary returns an int, always.
     return result
+
+
+def multiply_minor(quantity: Decimal, unit_price_minor: int) -> int:
+    """``round_half_up(quantity * unit_price_minor)`` for a *non-billing* amount.
+
+    P6's operating-cost estimator needs the identical arithmetic
+    :func:`compute_charge_minor` performs, but over a usage quantity that is not
+    a service quantity: audio hours, GB-months and token counts are not
+    ``NUMERIC(12,3)`` and are not what FIN-2 constrains. Rather than relax
+    :func:`quantize_quantity` — which exists to keep *customer billing* exact —
+    this exposes the same single rounding rule for the other caller.
+
+    The FIN-3 "one rounding point" rule is untouched: it is a statement about the
+    customer ledger, and nothing here ever posts to it.
+
+    >>> multiply_minor(Decimal("20.833333"), 22)
+    458
+    """
+    _reject_float(quantity, QuantityError, "quantity")
+    price = validate_unit_price_minor(unit_price_minor)
+    if not isinstance(quantity, Decimal):
+        raise QuantityError("quantity must be a Decimal")
+    if not quantity.is_finite() or quantity < 0:
+        raise QuantityError(f"quantity must be finite and non-negative (got {quantity})")
+
+    with localcontext() as ctx:
+        ctx.prec = 50
+        product = quantity * Decimal(price)
+    return round_half_up(product)
 
 
 def quantize_quantity(value: Decimal | int | str) -> Decimal:
@@ -159,7 +190,7 @@ def compute_charge_minor(quantity: Decimal | int | str, unit_price_minor: int) -
     with localcontext() as ctx:
         ctx.prec = 50
         product = qty * Decimal(price)
-    return _round_half_up(product)
+    return round_half_up(product)
 
 
 def validate_rate_bp(value: int) -> int:
@@ -178,7 +209,7 @@ def apply_rate_bp(base_amount_minor: int, rate_bp: int) -> int:
     """``round_half_up(base_amount_minor * rate_bp / 10000)`` (COM-9, P0 §5.2).
 
     The commission-level use of the *same* rounding rule as the charge — hence
-    the shared :func:`_round_half_up` — expressed in integer basis points so no
+    the shared :func:`round_half_up` — expressed in integer basis points so no
     decimal rate ever exists to be stored as a float.
 
     ``base_amount_minor`` may be negative: a correction reverses commission on
@@ -200,4 +231,4 @@ def apply_rate_bp(base_amount_minor: int, rate_bp: int) -> int:
     with localcontext() as ctx:
         ctx.prec = 50
         product = Decimal(base_amount_minor) * Decimal(rate) / Decimal(RATE_BP_SCALE)
-    return _round_half_up(product)
+    return round_half_up(product)

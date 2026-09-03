@@ -30,6 +30,8 @@ interface SyncValue extends SyncState {
   ) => Promise<void>;
   syncNow: () => Promise<void>;
   resolveIssue: (operationId: string) => Promise<void>;
+  /** Re-read the server's dashboard summary and cache it. Online only. */
+  refreshDashboard: () => Promise<void>;
 }
 
 const IDLE: SyncState = {
@@ -105,9 +107,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     [engine],
   );
 
+  const refreshDashboard = useCallback(async () => {
+    if (engine) await engine.refreshDashboard();
+  }, [engine]);
+
   const value = useMemo<SyncValue>(
-    () => ({ ...state, engine, enqueue, syncNow, resolveIssue }),
-    [state, engine, enqueue, syncNow, resolveIssue],
+    () => ({ ...state, engine, enqueue, syncNow, resolveIssue, refreshDashboard }),
+    [state, engine, enqueue, syncNow, resolveIssue, refreshDashboard],
   );
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

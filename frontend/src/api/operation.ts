@@ -17,11 +17,29 @@
 
 import { uuidv7 } from "@/lib/uuid";
 
+/**
+ * The op types this client sends.
+ *
+ * P0 §7.2's enumeration is the envelope's *extensible* vocabulary, not a promise
+ * about what may be queued: the offline write guarantee in V1 is CONFIRM and
+ * SKIP alone. The payment and operating-cost types below travel on this same
+ * envelope, with the same generated-once `operation_id`, but only ever straight
+ * to the server — they are never written to the outbox, and `POST
+ * /sync/operations` refuses them.
+ */
 export type OpType =
   | "customer.create"
   | "customer.update"
   | "service.record"
-  | "service.skip";
+  | "service.skip"
+  // Online-only (PAY-8).
+  | "payment.record"
+  | "payment.void"
+  // Online-only (P6 §19).
+  | "cost.item.create"
+  | "cost.rate.create"
+  | "cost.usage.record"
+  | "cost.actual.record";
 
 export interface OperationEnvelope<P> {
   operation_id: string;

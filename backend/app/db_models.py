@@ -16,6 +16,7 @@ __all__ = [
     "P1_TABLES",
     "P2_TABLES",
     "P3_TABLES",
+    "P6_TABLES",
     "ALL_TABLES",
 ]
 
@@ -47,13 +48,28 @@ P3_TABLES = frozenset(
     }
 )
 
-ALL_TABLES = P1_TABLES | P2_TABLES | P3_TABLES
+# The exact set P6 adds: the owner's operating-cost record (P6 §11). Tenant
+# scope, and deliberately nothing to do with the commission family above — what
+# the business pays its providers is not what it owes the platform. None carries
+# ``row_version``: the Operating Costs screen is online-only, so none of them is
+# a client sync entity.
+P6_TABLES = frozenset(
+    {
+        "operating_cost_item",
+        "operating_cost_rate",
+        "operating_cost_usage",
+        "operating_cost_actual",
+    }
+)
+
+ALL_TABLES = P1_TABLES | P2_TABLES | P3_TABLES | P6_TABLES
 
 
 def import_all_models() -> None:
     from app.audit import models as _audit  # noqa: F401
     from app.billing import models as _billing  # noqa: F401
     from app.commission import models as _commission  # noqa: F401
+    from app.costs import models as _costs  # noqa: F401
     from app.customers import models as _customers  # noqa: F401
     from app.identity import models as _identity  # noqa: F401
     from app.payments import models as _payments  # noqa: F401

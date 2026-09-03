@@ -1,9 +1,11 @@
 /**
- * The API shapes P4 consumes.
+ * The API shapes the frontend consumes.
  *
  * Hand-written to mirror the backend serializers exactly, not invented: every
  * field below appears in `app/customers/commands.py::serialize_customer`,
- * `app/service/commands.py::serialize_record`, `app/api/schemas.py`, or a route
+ * `app/service/commands.py::serialize_record`, `app/payments/commands.py::
+ * serialize_payment`, `app/billing/statements.py::serialize_statement`,
+ * `app/billing/dashboard.py`, `app/costs/`, `app/api/schemas.py`, or a route
  * body in `app/api/routes.py`. Nothing speculative is declared — if a field is
  * not here, the backend does not send it.
  *
@@ -15,6 +17,8 @@
 export type OperationStatus = "APPLIED" | "DUPLICATE";
 export type CustomerStatus = "ACTIVE" | "INACTIVE";
 export type ServiceKind = "SERVICE" | "SKIP";
+export type PaymentMethod = "CASH" | "BANK_TRANSFER" | "OTHER";
+export type PaymentRowStatus = "RECORDED" | "VOIDED";
 
 /** POST /api/v1/auth/login | /refresh — `TokenResponse`. */
 export interface TokenResponse {
@@ -113,10 +117,238 @@ export interface DayResponse {
   items: ServiceRecord[];
 }
 
+/** `serialize_payment` — a manual payment (PAY-1/2). */
+export interface Payment {
+  id: string;
+  customer_id: string;
+  amount_minor: number;
+  method: PaymentMethod;
+  received_on: string;
+  reference: string | null;
+  note: string | null;
+  status: PaymentRowStatus;
+  voided_reason: string | null;
+  voided_at: string | null;
+  operation_id: string;
+  source: string;
+  recorded_at: string | null;
+  row_version: number;
+  currency: string;
+  currency_exponent: number;
+}
+
+/**
+ * `serialize_statement` — one immutable issued statement (FIN-8).
+ *
+ * The five movement figures arrive **already split by origin**: a service
+ * correction and a payment reversal are different columns even though both are
+ * ADJUSTMENT rows in the ledger. Nothing here is added up on the client; the
+ * closing balance is the server's own.
+ */
+export interface Statement {
+  id: string;
+  customer_id: string;
+  cycle_id: string;
+  issued_at: string | null;
+  opening_balance_minor: number;
+  charges_minor: number;
+  service_adjustments_minor: number;
+  payments_minor: number;
+  payment_reversals_minor: number;
+  closing_balance_minor: number;
+  service_days: number;
+  total_quantity: string;
+  unit_label: string;
+  currency: string;
+  currency_exponent: number;
+  row_version: number;
+}
+
+export interface BillingCycle {
+  id: string;
+  period_start: string;
+  period_end: string;
+  status: string;
+  closed_at: string | null;
+}
+
+/** The four §11.1 derivations. Four distinct figures, never one from another. */
+export interface ReportingTotals {
+  business_generated_minor: number;
+  billed_value_minor: number;
+  collected_minor: number;
+  outstanding_minor: number;
+}
+
+export interface RecentPayment {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  customer_code: string;
+  amount_minor: number;
+  method: PaymentMethod;
+  received_on: string;
+  status: PaymentRowStatus;
+  reference: string | null;
+  recorded_at: string | null;
+}
+
+/** GET /dashboard/summary — every figure derived server-side. */
+export interface DashboardSummary {
+  business_date: string;
+  currency: string;
+  currency_exponent: number;
+  unit_label: string;
+  open_cycle: BillingCycle | null;
+  outstanding_minor: number;
+  all_time: ReportingTotals;
+  /** Null — not zeros — when no cycle is open. */
+  current_cycle: ReportingTotals | null;
+  customers: {
+    total: number;
+    active: number;
+    with_balance_due: number;
+    in_credit: number;
+  };
+  recent_payments: RecentPayment[];
+}
+
+export interface OutstandingCustomer {
+  customer_id: string;
+  code: string;
+  name: string;
+  area: string | null;
+  status: CustomerStatus;
+  outstanding_minor: number;
+}
+
+export interface OutstandingResponse {
+  currency: string;
+  currency_exponent: number;
+  items: OutstandingCustomer[];
+}
+
+// --- operating costs (P6) ----------------------------------------------------
+//
+// What the business pays its providers. A separate concept from the customer
+// ledger above and from platform commission, which the tenant cannot see at all.
+
+export type CostRecurrence = "MONTHLY" | "ANNUAL";
+
+export interface CostRate {
+  id: string;
+  cost_item_id: string;
+  effective_from: string;
+  effective_to: string | null;
+  unit: string | null;
+  unit_price_minor: number | null;
+  fixed_amount_minor: number | null;
+  fixed_recurrence: CostRecurrence | null;
+  currency: string;
+  currency_exponent: number;
+  source_note: string | null;
+  created_at: string | null;
+}
+
+export interface CostItem {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  status: string;
+  created_at: string | null;
+  rates: CostRate[];
+}
+
+export interface CostItemsResponse {
+  items: CostItem[];
+}
+
+/**
+ * One cost item for one month.
+ *
+ * `null` is meaningful throughout and is never rendered as zero: no measured
+ * usage means no estimate, no invoice means no actual and therefore no variance
+ * (P6 §14).
+ */
+export interface CostLine {
+  cost_item_id: string;
+  code: string;
+  name: string;
+  period_month: string;
+  currency: string;
+  currency_exponent: number;
+  rate: CostRate | null;
+  usage_quantity: string | null;
+  usage_unit: string | null;
+  usage_inputs: Record<string, unknown> | null;
+  estimated_amount_minor: number | null;
+  actual_amount_minor: number | null;
+  actual_invoice_reference: string | null;
+  variance_minor: number | null;
+  usage_id: string | null;
+  actual_id: string | null;
+}
+
+/** Totals are per currency: provider prices are not converted (P6 §18). */
+export interface CostTotals {
+  currency: string;
+  estimated_minor: number | null;
+  actual_minor: number | null;
+  variance_minor: number | null;
+}
+
+export interface CostSummary {
+  period_month: string;
+  lines: CostLine[];
+  totals: CostTotals[];
+}
+
+export interface CostHistoryMonth {
+  period_month: string;
+  totals: CostTotals[];
+}
+
+export interface CostHistory {
+  from_month: string;
+  to_month: string;
+  months: CostHistoryMonth[];
+  range_totals: CostTotals[];
+}
+
+export interface CostScenarioResult {
+  label: string | null;
+  cost_item_id: string;
+  code: string;
+  name: string;
+  period_month: string;
+  usage_quantity: string | null;
+  usage_unit: string | null;
+  derived_from: {
+    events_per_day: number;
+    seconds_per_event: string;
+    days: number;
+  } | null;
+  estimated_amount_minor: number | null;
+  currency: string;
+  currency_exponent: number;
+  rate: CostRate | null;
+}
+
+export interface CostScenarioResponse {
+  period_month: string;
+  results: CostScenarioResult[];
+  totals: { currency: string; estimated_minor: number | null }[];
+}
+
 /** Every mutation's reply (`OperationResponse`). */
 export interface OperationResult<T> {
   status: OperationStatus;
   entity: T;
+}
+
+export interface ListResponse<T> {
+  items: T[];
 }
 
 /** The one frozen error envelope (P0 §15). */

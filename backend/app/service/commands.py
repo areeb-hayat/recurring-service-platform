@@ -60,6 +60,7 @@ __all__ = [
     "serialize_record",
     "load_record",
     "list_day",
+    "list_customer_history",
 ]
 
 _ACTIVE_DAY_INDEX = "uq_daily_service_record_active_day"
@@ -440,6 +441,46 @@ def void_service(
     )
     session.flush()
     return serialize_record(record, ctx), "daily_service_record", record.id
+
+
+def list_customer_history(
+    session: Session,
+    ctx: TenantContext,
+    customer_id: uuid.UUID,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[DailyServiceRecord]:
+    """One customer's service records, most recent first (P0 §15, AUD-8).
+
+    Superseded and voided rows are **always** included — this is the history
+    endpoint, and a correction that hid what it replaced would defeat the whole
+    point of correcting rather than editing. Each row carries its own status,
+    ``corrects_id`` and ``superseded_by_id``, so the chain is walkable from any
+    point.
+
+    ``recorded_at`` alone is not a total order (a sync batch can commit several
+    rows in the same instant), so ``row_version`` — unique across the shared
+    sequence — breaks the tie and makes offset paging sound.
+    """
+    limit = max(1, min(limit, 500))
+    return list(
+        session.execute(
+            select(DailyServiceRecord)
+            .where(
+                DailyServiceRecord.tenant_id == ctx.tenant_id,
+                DailyServiceRecord.customer_id == customer_id,
+            )
+            .order_by(
+                DailyServiceRecord.service_date.desc(),
+                DailyServiceRecord.row_version.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+        .scalars()
+        .all()
+    )
 
 
 def list_day(

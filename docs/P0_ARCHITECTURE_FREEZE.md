@@ -1176,6 +1176,60 @@ like any other, which is what makes §8.2 structural rather than a promise.
 
 ---
 
+## 15a. Operating costs (added 2026-09-03, post-P0)
+
+**Status: an owner-approved product addition made during P6, not part of the original freeze.**
+Recorded here because it introduces persisted entities and a capability, and both belong in the
+authoritative architecture document rather than only in a handover.
+
+**What it is.** The owner needs to see what the business pays its *providers* — hosting and
+database, speech-to-text, intent interpretation, backup storage, messaging automation hosting,
+messaging charges, the domain, and anything else approved — how much usage produced each estimate,
+what the provider actually invoiced, and the difference between the two, month by month.
+
+**What it is not.** It is **not** platform commission (§11) and it is **not** the customer ledger
+(§5.3). Three separate accounting concepts now exist:
+
+| Concept | Table family | Scope | Answers |
+| --- | --- | --- | --- |
+| Customer ledger | `ledger_entry`, `statement`, `payment` | tenant | what a customer owes the business |
+| Platform commission | `commission_*` | **platform** | what the business owes the platform |
+| Operating costs | `operating_cost_*` | tenant | what the business owes its providers |
+
+They may be shown near each other for the owner's convenience. They are never summed together,
+never share a table, and never share a capability. An operating cost posts no ledger entry, changes
+no customer's outstanding balance, and moves no commission figure.
+
+**Model.** Four tables (P6):
+
+* `operating_cost_item` — a provider or cost line, configured by the owner. A table, not an enum:
+  the current list is what the business happens to pay for today.
+* `operating_cost_rate` — a versioned price with an effective range. Ranges may not overlap for one
+  item (EXCLUDE constraint, as `commission_plan`), so "the rate in force" is a lookup with one
+  answer. A new rate closes its open-ended predecessor; no rate is ever edited.
+* `operating_cost_usage` — a month's measured usage, the rate terms **snapshotted**, and the
+  estimate they produced.
+* `operating_cost_actual` — what the provider actually invoiced for that month.
+
+**Arithmetic.** `estimate = round_half_up(usage x unit_price_minor)` for a usage-priced item; the
+amount itself, or a twelfth of it, for a fixed monthly or annual charge. `variance = actual −
+estimated`. Money is integer minor units and usage is `Decimal` — the same representation rules as
+everywhere else (FIN-1). Rates are **data**; no provider price appears in application code.
+
+**Currency.** A rate and an invoice each carry their own currency and exponent, because providers
+bill in their own currency and the tenant bills in its own. There is **no FX feature in V1**:
+totals are reported per currency and nothing is converted.
+
+**Authorization.** Two new tenant capabilities, `cost:read` and `cost:write`, held by
+`OWNER_ADMIN`. Deliberately not expressed through any `commission:*` capability — the disjointness
+in §3.2 is unchanged, and giving costs their own authority is what keeps the two accounting systems
+from sharing a key.
+
+**Not synchronised.** None of these tables carries `row_version`. The Operating Costs screen is
+online-only; offline it says so rather than showing a figure it cannot vouch for.
+
+---
+
 ## 16. Explicit deferred decisions
 
 Deferred on purpose. Each is isolated behind a port, a config value, or a data row, so none of them

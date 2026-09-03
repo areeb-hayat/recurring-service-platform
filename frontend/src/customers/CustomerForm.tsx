@@ -4,6 +4,7 @@ import { ApiError, fieldErrorFor, messageFor } from "@/api/errors";
 import type { CustomerDraft } from "@/api/customers";
 import type { Customer } from "@/api/types";
 import { isValidQuantity } from "@/lib/decimal";
+import { majorToMinor, minorToMajor } from "@/lib/money";
 
 /**
  * The create and edit form.
@@ -58,24 +59,10 @@ export function valuesFromCustomer(customer: Customer): CustomerFormValues {
   };
 }
 
-/** Split an integer count of minor units for display. No division, no float. */
-export function minorToMajor(minor: number, exponent: number): string {
-  if (exponent === 0) return minor.toString();
-  const digits = Math.abs(minor).toString().padStart(exponent + 1, "0");
-  const whole = digits.slice(0, digits.length - exponent);
-  const fraction = digits.slice(digits.length - exponent);
-  return (minor < 0 ? "-" : "") + whole + "." + fraction;
-}
-
-/** Pad a typed major amount back to minor units by string, never by multiplying. */
-export function majorToMinor(text: string, exponent: number): number | null {
-  const trimmed = text.trim();
-  const pattern =
-    exponent === 0 ? /^\d+$/ : new RegExp("^\\d+(\\.\\d{0," + exponent + "})?$");
-  if (!pattern.test(trimmed)) return null;
-  const [whole = "0", fraction = ""] = trimmed.split(".");
-  return Number(whole + fraction.padEnd(exponent, "0"));
-}
+// Both moved to `lib/money.ts` in P6 and re-exported here so existing callers
+// are unchanged. The payment form parses a typed amount too, and "what a person
+// typed, as minor units" wants one definition rather than two that agree today.
+export { majorToMinor, minorToMajor };
 
 export function toDraft(values: CustomerFormValues, exponent: number): CustomerDraft | null {
   const minor = majorToMinor(values.unit_price_major, exponent);

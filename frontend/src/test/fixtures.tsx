@@ -11,8 +11,11 @@ import { SyncProvider } from "@/sync/SyncProvider";
 import { engineFor } from "@/sync/engine";
 import type {
   Customer,
+  DashboardSummary,
   DayResponse,
+  Payment,
   ServiceRecord,
+  Statement,
   TenantSettings,
 } from "@/api/types";
 import { stub, type RecordedRequest, type StubbedResponse } from "./http";
@@ -113,6 +116,97 @@ export function serviceRecord(overrides: Partial<ServiceRecord> = {}): ServiceRe
   };
 }
 
+export function payment(overrides: Partial<Payment> = {}): Payment {
+  return {
+    id: "dddddddd-dddd-7ddd-8ddd-dddddddddddd",
+    customer_id: "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa",
+    amount_minor: 30000,
+    method: "CASH",
+    received_on: "2026-09-02",
+    reference: null,
+    note: null,
+    status: "RECORDED",
+    voided_reason: null,
+    voided_at: null,
+    operation_id: "eeeeeeee-eeee-7eee-8eee-eeeeeeeeeeee",
+    source: "ONLINE",
+    recorded_at: "2026-09-02T06:00:00+00:00",
+    row_version: 120,
+    currency: "PKR",
+    currency_exponent: 2,
+    ...overrides,
+  };
+}
+
+export function statement(overrides: Partial<Statement> = {}): Statement {
+  return {
+    id: "ffffffff-ffff-7fff-8fff-ffffffffffff",
+    customer_id: "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa",
+    cycle_id: "99999999-9999-7999-8999-999999999999",
+    issued_at: "2026-09-01T00:00:00+00:00",
+    opening_balance_minor: 0,
+    charges_minor: 100000,
+    service_adjustments_minor: 0,
+    payments_minor: 30000,
+    payment_reversals_minor: 0,
+    closing_balance_minor: 70000,
+    service_days: 4,
+    total_quantity: "8.000",
+    unit_label: "bottle",
+    currency: "PKR",
+    currency_exponent: 2,
+    row_version: 130,
+    ...overrides,
+  };
+}
+
+export function dashboardSummary(
+  overrides: Partial<DashboardSummary> = {},
+): DashboardSummary {
+  return {
+    business_date: "2026-09-03",
+    currency: "PKR",
+    currency_exponent: 2,
+    unit_label: "bottle",
+    open_cycle: {
+      id: "99999999-9999-7999-8999-999999999999",
+      period_start: "2026-09-01",
+      period_end: "2026-09-30",
+      status: "OPEN",
+      closed_at: null,
+    },
+    outstanding_minor: 70000,
+    all_time: {
+      business_generated_minor: 100000,
+      billed_value_minor: 0,
+      collected_minor: 30000,
+      outstanding_minor: 70000,
+    },
+    current_cycle: {
+      business_generated_minor: 100000,
+      billed_value_minor: 0,
+      collected_minor: 30000,
+      outstanding_minor: 70000,
+    },
+    customers: { total: 1, active: 1, with_balance_due: 1, in_credit: 0 },
+    recent_payments: [
+      {
+        id: "dddddddd-dddd-7ddd-8ddd-dddddddddddd",
+        customer_id: "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa",
+        customer_name: "Ayesha Khan",
+        customer_code: "C-001",
+        amount_minor: 30000,
+        method: "CASH",
+        received_on: "2026-09-02",
+        status: "RECORDED",
+        reference: null,
+        recorded_at: "2026-09-02T06:00:00+00:00",
+      },
+    ],
+    ...overrides,
+  };
+}
+
 export function errorBody(code: string, detail = "failed", extra: object = {}) {
   return { error: { code, detail, ...extra } };
 }
@@ -123,8 +217,14 @@ export function changesResponse(overrides: Record<string, unknown> = {}) {
     cursor: 0,
     has_more: false,
     head: 0,
-    feed_version: 1,
-    entities: ["tenant", "customer", "daily_service_record"],
+    feed_version: 2,
+    entities: [
+      "tenant",
+      "customer",
+      "daily_service_record",
+      "payment",
+      "statement",
+    ],
     changes: [],
     ...overrides,
   };
@@ -134,16 +234,21 @@ export interface ServerFixture {
   settings?: TenantSettings;
   customers?: Customer[];
   day?: DayResponse;
+  /** P6 seed reads: the tenant's payments and issued statements. */
+  payments?: Payment[];
+  statements?: Statement[];
   /** Answer for POST /sync/operations; omit to leave it unstubbed. */
   push?: StubbedResponse | ((request: RecordedRequest, callIndex: number) => StubbedResponse);
   changes?: StubbedResponse;
 }
 
 /**
- * Stub the five endpoints a signed-in device talks to.
+ * Stub the endpoints a signed-in device talks to.
  *
  * These are exactly the calls the sync engine makes: the tenant's settings, the
- * feed head, the seed reads, and the push. Nothing else leaves the app.
+ * feed head, the seed reads — customers, today's round, and from P6 the payment
+ * and statement history the new screens render — and the push. Nothing else
+ * leaves the app.
  */
 export function stubServer(fixture: ServerFixture = {}): void {
   const settings = fixture.settings ?? SETTINGS;
@@ -158,6 +263,8 @@ export function stubServer(fixture: ServerFixture = {}): void {
   stub("GET", "/api/v1/sync/changes", fixture.changes ?? { body: changesResponse() });
   stub("GET", "/api/v1/customers", { body: { items: customers } });
   stub("GET", `/api/v1/service/day/${settings.business_date}`, { body: day });
+  stub("GET", "/api/v1/payments", { body: { items: fixture.payments ?? [] } });
+  stub("GET", "/api/v1/statements", { body: { items: fixture.statements ?? [] } });
   if (fixture.push) stub("POST", "/api/v1/sync/operations", fixture.push);
 }
 

@@ -321,6 +321,41 @@ gateway-verification family, which is out of scope.
 
 ---
 
+## 7a. Operating-cost invariants (COST) — added 2026-09-03 with P6
+
+Operating costs are what the business pays its **providers**. See P0 §15a. The invariants exist
+almost entirely to keep this apart from the other two money systems.
+
+| ID | Invariant |
+| --- | --- |
+| COST-1 | An operating cost never creates a `ledger_entry`, never changes any customer's outstanding balance, and never appears on a statement. |
+| COST-2 | An operating cost never creates or alters a `commission_event`, `commission_adjustment` or `commission_settlement`, and no operating-cost figure is ever summed with a commission figure. Tenant operating-cost authority (`cost:read` / `cost:write`) is disjoint from `commission:*`. |
+| COST-3 | No provider rate, unit price or fixed amount is hard-coded. All come from an `operating_cost_rate` row and are changeable without a deployment. |
+| COST-4 | Rate effective ranges must not overlap for one cost item, enforced by a database EXCLUDE constraint. A new rate closes its open-ended predecessor at `effective_from − 1 day`; no rate row is ever edited. |
+| COST-5 | The rate applying to a month is the one in force on that month's **first day**. A recorded month snapshots the terms it used, so a later rate change never restates it. |
+| COST-6 | `estimate = round_half_up(usage_quantity × unit_price_minor)` for a usage-priced item, or the fixed amount (a twelfth of it, if annual). Money is integer minor units; usage is `Decimal`. No float. |
+| COST-7 | `variance = actual − estimated`, reported only when both exist. A month with no measured usage has **no estimate** and a month with no invoice has **no actual** — never a zero, which would be a claim that the provider charged nothing. |
+| COST-8 | Totals are reported per currency and are never converted. V1 has no FX source. |
+| COST-9 | Accepted usage figures and invoices are never edited or deleted. A replacement supersedes the original, which survives carrying the reason, the actor and the timestamp (AUD-1, AUD-2, AUD-6). |
+| COST-10 | Operating-cost writes are online-only and are not accepted sync operations. No `operating_cost_*` table carries `row_version`, so none can enter the client's offline snapshot. |
+| COST-11 | Rate changes and invoice entries and corrections are audited, tenant-scoped, with before/after and the actor. |
+
+### Acceptance — COST
+
+- **A-COST-1/2** Record usage and an invoice; assert no ledger entry and no commission row exists,
+  and that a customer's outstanding is unchanged by any amount of provider cost.
+- **A-COST-4** Adding an overlapping range is refused by the application *and* by direct SQL.
+- **A-COST-5** Record February's usage at one price, then add a March rate at a different price;
+  February's estimate is unchanged.
+- **A-COST-7** A month with an invoice and no estimate, and one with an estimate and no invoice,
+  both report a null variance rather than a number.
+- **A-COST-9** Replacing an invoice without a reason is rejected; with one, the original row
+  survives as `SUPERSEDED` carrying that reason and pointing at its replacement.
+- **A-COST-10** Tenant A cannot read or write tenant B's cost items, rates, usage or invoices; a
+  platform principal is refused on every operating-cost route.
+
+---
+
 ## 8. Voice invariants (VOI)
 
 Voice is an input method. It creates no new authority, no new domain path, and no new financial

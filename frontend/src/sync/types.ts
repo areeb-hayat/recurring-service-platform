@@ -8,7 +8,14 @@
 
 import type { OperationEnvelope } from "@/api/operation";
 import type { ServiceIntent } from "@/api/service";
-import type { Customer, ServiceRecord, TenantSettings } from "@/api/types";
+import type {
+  Customer,
+  DashboardSummary,
+  Payment,
+  ServiceRecord,
+  Statement,
+  TenantSettings,
+} from "@/api/types";
 
 /** The verdicts the server may return for one operation (P0 §7.3). */
 export type SyncVerdict = "APPLIED" | "DUPLICATE" | "REJECTED" | "CONFLICT";
@@ -94,7 +101,22 @@ export interface IssueEntry {
   resolved_at: string | null;
 }
 
-export type SnapshotEntity = "tenant" | "customer" | "daily_service_record";
+/**
+ * What the device stores.
+ *
+ * `payment` and `statement` join in P6, because P6 builds the screens that
+ * render them. `dashboard` is not a feed entity at all: it is the last
+ * server-computed summary, written verbatim when the dashboard is opened online
+ * so a later offline visit can show it with an "as of" stamp rather than a
+ * blank (P0 §7.1 lists the dashboard among the snapshot's authoritative reads).
+ */
+export type SnapshotEntity =
+  | "tenant"
+  | "customer"
+  | "daily_service_record"
+  | "payment"
+  | "statement"
+  | "dashboard";
 
 export interface SnapshotRow {
   /** `${entity}:${id}` — one key space, one store. */
@@ -120,6 +142,16 @@ export interface SnapshotRecordRow extends SnapshotRow {
   data: ServiceRecord;
 }
 
+export interface SnapshotPaymentRow extends SnapshotRow {
+  entity: "payment";
+  data: Payment;
+}
+
+export interface SnapshotStatementRow extends SnapshotRow {
+  entity: "statement";
+  data: Statement;
+}
+
 /** `meta` is a small key/value store; these are its keys. */
 export interface MetaShape {
   sync_cursor: number;
@@ -131,6 +163,11 @@ export interface MetaShape {
   next_seq: number;
   /** Which tenant this database belongs to — a tripwire, not an authority. */
   tenant_id: string | null;
+  /** When the cached dashboard summary was read from the server. */
+  dashboard_read_at: string | null;
 }
+
+/** The stored dashboard summary, exactly as the server computed it. */
+export type CachedDashboard = DashboardSummary;
 
 export type MetaKey = keyof MetaShape;

@@ -28,9 +28,20 @@ import { ApiError } from "@/api/errors";
 import type { OperationEnvelope } from "@/api/operation";
 import type { ServiceIntent } from "@/api/service";
 import { listAllCustomers } from "@/api/customers";
+import {
+  getDashboardSummary,
+  listAllPayments,
+  listAllStatements,
+} from "@/api/finance";
 import { getDay } from "@/api/service";
 import { getTenantSettings } from "@/api/tenant";
-import type { Customer, ServiceRecord, TenantSettings } from "@/api/types";
+import type {
+  Customer,
+  Payment,
+  ServiceRecord,
+  Statement,
+  TenantSettings,
+} from "@/api/types";
 import { getChanges, pushOperations } from "./api";
 import { closeSyncDb, openSyncDb, type SyncDatabase } from "./db";
 import {
@@ -48,6 +59,7 @@ import {
   resolveIssue as resolveIssueRow,
   seedSnapshot,
   setMeta,
+  writeSnapshotDoc,
   writeTenantSettings,
 } from "./stores";
 import type {
@@ -115,6 +127,11 @@ function isOnline(): boolean {
  * An offline device keeps using its cached business date, so its current round
  * stays available for as long as it stays offline; the rule only bites when a
  * pull brings a newer date back from the server.
+ *
+ * It applies to service records **only**. Payments and statements are kept in
+ * full: they are not a rolling day-view but the history the customer financial
+ * view and the statement list render, and trimming them by age would invent a
+ * retention horizon nobody asked for.
  *
  * Records for other dates are still *seen* — the cursor advances past them
  * normally, so nothing is skipped — they are simply not stored, because storing
@@ -426,9 +443,16 @@ export class SyncEngine {
     settings: TenantSettings,
     head: number,
   ): Promise<void> {
-    const [customers, day] = await Promise.all([
+    // P6 added payment and statement to the feed, which means a first-time
+    // device needs them seeded too: the feed only ever hands over rows *above*
+    // the cursor, and this device starts at `head`. Both are read to the end of
+    // their pagination for the same reason customers are — a silent truncation
+    // would be history that simply never appears offline.
+    const [customers, day, payments, statements] = await Promise.all([
       listAllCustomers({ status: "ACTIVE" }),
       getDay(settings.business_date),
+      listAllPayments(),
+      listAllStatements(),
     ]);
     await seedSnapshot(
       db,
@@ -446,9 +470,39 @@ export class SyncEngine {
           row_version: record.row_version,
           data: record,
         })),
+        ...payments.map((payment: Payment) => ({
+          entity: "payment" as const,
+          id: payment.id,
+          row_version: payment.row_version,
+          data: payment,
+        })),
+        ...statements.map((statement: Statement) => ({
+          entity: "statement" as const,
+          id: statement.id,
+          row_version: statement.row_version,
+          data: statement,
+        })),
       ],
       head,
     );
+  }
+
+  /**
+   * Read the dashboard summary and keep it, so it survives going offline.
+   *
+   * Called when the dashboard screen is opened, never on every sync: the
+   * summary is several aggregate queries, and a round of two hundred taps
+   * triggers a sync after each one. What is stored is the server's own
+   * document, verbatim — the client adds nothing up, and the screen shows when
+   * it was read (P0 §7.1, SYN-9).
+   */
+  async refreshDashboard(): Promise<void> {
+    const summary = await getDashboardSummary();
+    const db = await this.db();
+    await writeSnapshotDoc(db, "dashboard", this.tenantId, summary, {
+      dashboard_read_at: new Date().toISOString(),
+    });
+    await this.refreshCounts(true);
   }
 
   private scheduleRetry(delayMs: number): void {

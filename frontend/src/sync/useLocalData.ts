@@ -12,15 +12,30 @@
 
 import { useEffect, useState } from "react";
 
-import type { Customer, ServiceRecord, TenantSettings } from "@/api/types";
+import type {
+  Customer,
+  DashboardSummary,
+  Payment,
+  ServiceRecord,
+  Statement,
+  TenantSettings,
+} from "@/api/types";
 import { useSync } from "./SyncProvider";
-import { listIssues, listOutbox, readSnapshot, readSnapshotRow } from "./stores";
+import {
+  getMeta,
+  listIssues,
+  listOutbox,
+  readSnapshot,
+  readSnapshotRow,
+} from "./stores";
 import type { IssueEntry, OutboxEntry } from "./types";
 
 export interface LocalData {
   settings: TenantSettings | null;
   customers: Customer[];
   records: ServiceRecord[];
+  payments: Payment[];
+  statements: Statement[];
   outbox: OutboxEntry[];
   issues: IssueEntry[];
 }
@@ -29,6 +44,8 @@ const EMPTY: LocalData = {
   settings: null,
   customers: [],
   records: [],
+  payments: [],
+  statements: [],
   outbox: [],
   issues: [],
 };
@@ -60,15 +77,18 @@ export function useLocalData(): LocalDataResult {
     }
     void (async () => {
       const db = await engine.db();
-      const [settings, customers, records, outbox, issues] = await Promise.all([
-        readSnapshotRow<TenantSettings>(db, "tenant", engine.tenantId),
-        readSnapshot<Customer>(db, "customer"),
-        readSnapshot<ServiceRecord>(db, "daily_service_record"),
-        listOutbox(db),
-        listIssues(db),
-      ]);
+      const [settings, customers, records, payments, statements, outbox, issues] =
+        await Promise.all([
+          readSnapshotRow<TenantSettings>(db, "tenant", engine.tenantId),
+          readSnapshot<Customer>(db, "customer"),
+          readSnapshot<ServiceRecord>(db, "daily_service_record"),
+          readSnapshot<Payment>(db, "payment"),
+          readSnapshot<Statement>(db, "statement"),
+          listOutbox(db),
+          listIssues(db),
+        ]);
       if (cancelled) return;
-      setData({ settings, customers, records, outbox, issues });
+      setData({ settings, customers, records, payments, statements, outbox, issues });
       setLoading(false);
     })();
     return () => {
@@ -81,4 +101,46 @@ export function useLocalData(): LocalDataResult {
     loading,
     unavailable: !loading && data.settings === null,
   };
+}
+
+/**
+ * The last dashboard summary the server computed, and when it was read.
+ *
+ * Returned rather than recomputed: every figure on it came from
+ * `GET /dashboard/summary`. When there is none, the screen says so — a
+ * dashboard that guesses is worse than one that admits it is offline.
+ */
+export function useCachedDashboard(): {
+  summary: DashboardSummary | null;
+  readAt: string | null;
+  loading: boolean;
+} {
+  const { engine, revision } = useSync();
+  const [state, setState] = useState<{
+    summary: DashboardSummary | null;
+    readAt: string | null;
+    loading: boolean;
+  }>({ summary: null, readAt: null, loading: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!engine) {
+      setState({ summary: null, readAt: null, loading: false });
+      return;
+    }
+    void (async () => {
+      const db = await engine.db();
+      const [summary, readAt] = await Promise.all([
+        readSnapshotRow<DashboardSummary>(db, "dashboard", engine.tenantId),
+        getMeta(db, "dashboard_read_at"),
+      ]);
+      if (cancelled) return;
+      setState({ summary, readAt, loading: false });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [engine, revision]);
+
+  return state;
 }

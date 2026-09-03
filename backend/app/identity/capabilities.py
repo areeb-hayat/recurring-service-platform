@@ -32,6 +32,14 @@ CAPABILITIES: dict[str, frozenset[str]] = {
             "reminder:trigger",
             "dashboard:read",
             "search:use",
+            # P6: the owner's operating-cost record — what the business pays its
+            # providers. Tenant business data, so it lives in the tenant set and
+            # is deliberately NOT expressed through any ``commission:*``
+            # capability: platform commission and company operating expenses are
+            # two separate accounting concepts and must not share authority
+            # (SEC-5 stays true — these are disjoint from the platform set).
+            "cost:read",
+            "cost:write",
         }
     ),
     Role.PLATFORM_OWNER: frozenset(

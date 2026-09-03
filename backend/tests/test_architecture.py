@@ -24,6 +24,7 @@ DOMAIN_PACKAGES = {
     "billing",
     "payments",
     "commission",
+    "costs",
     "audit",
     "sync",
     "core",
@@ -324,6 +325,10 @@ class TestTenantScopingIsStructural:
         "app/commission/engine.py",
         "app/commission/settlements.py",
         "app/commission/reporting.py",
+        "app/billing/dashboard.py",
+        "app/costs/commands.py",
+        "app/costs/estimates.py",
+        "app/costs/reporting.py",
         "app/sync/changes.py",
         "app/sync/operations.py",
     ]
@@ -345,6 +350,10 @@ class TestTenantScopingIsStructural:
                 "serialize_plan",
                 "serialize_settlement",
                 "serialize_position",
+                "serialize_cost_item",
+                "serialize_rate",
+                "serialize_usage",
+                "serialize_actual",
                 "commission_minor_for",
             }:
                 continue
