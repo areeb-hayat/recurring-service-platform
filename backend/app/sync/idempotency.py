@@ -9,6 +9,9 @@ Guarantees (SYN-1, SYN-2, SYN-3, SYN-13, SYN-14):
 * first request  -> effect + register row committed **in one transaction**
 * exact replay   -> nothing created, no side effect, same logical result
 * replay with a different payload -> refused (SYN-14), never silently resolved
+
+It is also where SYN-10's commit-order boundary is taken, for the operations that
+write an entity the change feed carries — see :mod:`app.sync.serialization`.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import IdempotencyKeyReuseError
 from app.sync.models import OperationStatus, SyncOperation
+from app.sync.serialization import FEED_WRITING_OP_TYPES, serialize_feed_writes
 from app.tenancy.context import PlatformContext, TenantContext
 
 __all__ = ["OperationOutcome", "compute_request_hash", "execute_idempotent"]
@@ -107,6 +111,17 @@ def execute_idempotent(
     idempotency system beside it.
     """
     request_hash = compute_request_hash(op_type, payload)
+
+    # SYN-10, and it must come first.
+    #
+    # Before the register is claimed, not after: a transaction that took this
+    # lock while already holding an uncommitted register row would wait on the
+    # lock while the lock's holder waited on that row's unique index — a deadlock
+    # between two *identical* envelopes, which is exactly the case A-SYN-1/2
+    # fires five of at once. One order for everybody: lock, then register, then
+    # effect.
+    if op_type in FEED_WRITING_OP_TYPES:
+        serialize_feed_writes(session, ctx.tenant_id)
 
     existing = _load_register_row(session, ctx.tenant_id, operation_id)
     if existing is not None:

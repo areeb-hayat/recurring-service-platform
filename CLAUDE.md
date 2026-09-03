@@ -10,23 +10,29 @@ satisfies them.
 ## Current phase
 
 P0 (architecture freeze), P1 (backend & data foundation), P2 (financial engine), P3
-(commercial tracking / commission) and P4 (customer & daily UI) are complete — see
-`docs/P1_HANDOVER.md`, `docs/P2_HANDOVER.md`, `docs/P3_HANDOVER.md` and
-`docs/P4_HANDOVER.md`. The backend lives in `backend/` and the frontend in `frontend/`.
+(commercial tracking / commission), P4 (customer & daily UI) and P5 (offline & sync) are
+complete — see `docs/P1_HANDOVER.md`, `docs/P2_HANDOVER.md`, `docs/P3_HANDOVER.md`,
+`docs/P4_HANDOVER.md` and `docs/P5_HANDOVER.md`. The backend lives in `backend/` and the
+frontend in `frontend/`.
 P2 added billing cycles, posting-cycle resolution, immutable statements, manual payments with
 void, the derived payment status and the §11.1 reporting derivations. P3 added the four
 commission tables, the four earning bases, snapshotted terms, signed adjustments, aggregate
 settlement and the platform-only commission surface. P4 added the first frontend: login, the
 authenticated shell, customer list/create/view/edit and the Daily Register.
 
-**P4 is online-first.** It has no Service Worker, no IndexedDB, no outbox and no sync — that
-is P5, and nothing in P4 pretends otherwise. What P4 does provide is the operation envelope
-(`frontend/src/api/operation.ts`) and the unresolved-operation state machine
-(`frontend/src/daily/usePendingOperation.ts`), so P5 has somewhere to persist envelopes without
-reshaping the write path.
+**P5 made the app offline-first.** A Workbox Service Worker caches the app shell; four IndexedDB
+stores (`outbox`, `issues`, `snapshot`, `meta`) live in `frontend/src/sync/`; `POST /sync/operations`
+and `GET /sync/changes` live in `backend/app/sync/`. The Daily Register now reads the snapshot and
+writes through the outbox, so there is one write path online and off.
 
-Do not skip ahead: no offline sync endpoint, no reminders, no AI and no voice before their
-package. P1–P4 deliberately contain no adapter and make no network call to any provider.
+**V1's offline write guarantee is CONFIRM and SKIP only** (`service.record`, `service.skip`) — see
+the dated clarification at P0 §7.2. Payments, corrections, voids and customer create/edit stay
+online-only; the envelope is extensible, the scope is not. The Service Worker caches **no API
+response** — business data offline comes from the snapshot, and a missing snapshot says
+"Unavailable offline" rather than guessing.
+
+Do not skip ahead: no reminders, no AI and no voice before their package. P1–P5 deliberately
+contain no adapter and make no network call to any provider.
 
 Run the backend tests with a real PostgreSQL — never SQLite:
 
@@ -42,6 +48,10 @@ Run the frontend tests, typecheck and build from `frontend/`:
     npm test            # vitest
     npm run typecheck   # tsc --noEmit
     npm run build       # typecheck, then vite build
+    npm run e2e         # playwright, against the production build in dist/
+
+The Playwright suite needs `npm run build` to have run (it tests the real Service Worker) and
+`npx playwright install chromium` once.
 
 ## Collaboration
 
@@ -166,8 +176,10 @@ frontend/src/api        typed HTTP boundary, error envelope, operation envelope
 frontend/src/auth       session storage, AuthContext, login screen
 frontend/src/components shell, auth gate, feedback, quantity stepper
 frontend/src/customers  list, create, detail/edit
-frontend/src/daily      the Daily Register and the pending-operation hook
+frontend/src/daily      the Daily Register
 frontend/src/lib        exact quantity arithmetic, money display, uuidv7
+frontend/src/sync       IndexedDB stores, the sync engine, sync status, Needs Attention
+frontend/e2e            Playwright acceptance suite and its fixture server
 ```
 
 The frontend renders what the server returned. It never computes a charge, a balance, a due

@@ -271,6 +271,10 @@ half), **A-SEC-9** (CI secret scanning, open since P1 and still cheap to close),
 customer-history endpoint is P6) — plus REM-*, VOI-*, SYN-5..12 and A-SLOT-1..4, none of which P3
 touches.
 
+> **Updated 2026-09-03 (P5).** A-FIN-1's client half and SYN-5..12 were closed by P5. A-PAY-8 was
+> *rewritten* rather than closed: payments are online-only in V1, so its offline half no longer
+> exists as a criterion. A-SEC-9 and A-AUD-8 remain open.
+
 **D1 — the plan is resolved by the source fact's business date, not by "today".** P0 §11 says an
 event copies the terms "in force at the time"; the brief said "effective when the earning event was
 created". These coincide for same-day work and differ for a backdated record or a plan changed

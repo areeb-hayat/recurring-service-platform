@@ -214,7 +214,7 @@ corrections, voids, payments and payment voids, which P1 could not do.
 | Criterion | Why not |
 | --- | --- |
 | A-FIN-1 (client half) | "no JavaScript arithmetic on `*_minor`" — no frontend exists |
-| A-PAY-8 (offline half) | "record offline, restart the browser, sync" needs the PWA outbox. The server half — SYNC transport takes the identical validation path, and the audit row records it — *is* tested |
+| A-PAY-8 (offline half) | "record offline, restart the browser, sync" needs the PWA outbox. The server half — SYNC transport takes the identical validation path, and the audit row records it — *is* tested. **Superseded in P5:** A-PAY-8 was rewritten because payments are online-only in V1; the criterion is now "a `payment.record` sent to the sync endpoint is REJECTED with no effect", and it is tested |
 | A-SEC-6 (platform half) | still vacuous: no `/platform/*` route exists |
 | A-SEC-9 | no pre-commit or CI secret scanning exists. The repository contains no secret and `.env.example` is values-free, both asserted — but the criterion asks for scanning, which remains open from P1 |
 | A-AUD-8 | the customer-history endpoint is P6. Voided payments are returned by `list_payments` and superseded records by the day listing, but the endpoint the criterion names does not exist |

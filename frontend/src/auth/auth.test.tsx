@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { App } from "@/App";
 import { loadSession } from "@/auth/session";
-import { errorBody, renderApp, SETTINGS, signedIn } from "@/test/fixtures";
+import { errorBody, renderApp, SETTINGS, signedIn, stubServer } from "@/test/fixtures";
 import { requestsTo, stub } from "@/test/http";
 
 const TOKENS = {
@@ -17,13 +17,7 @@ const TOKENS = {
   tenant_id: "11111111-1111-7111-8111-111111111111",
 };
 
-function stubEmptyRegister() {
-  stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
-  stub("GET", "/api/v1/customers", { body: { items: [] } });
-  stub("GET", `/api/v1/service/day/${SETTINGS.business_date}`, {
-    body: { service_date: SETTINGS.business_date, business_date: SETTINGS.business_date, items: [] },
-  });
-}
+const stubEmptyRegister = () => stubServer();
 
 describe("signing in", () => {
   it("stores the session and lands on today's round", async () => {
@@ -91,7 +85,9 @@ describe("authenticated routing", () => {
     stubEmptyRegister();
 
     renderApp(<App />, "/today");
-    await screen.findByRole("navigation", { name: "Main" });
+    await waitFor(() =>
+      expect(requestsTo("GET", "/api/v1/tenant/settings")).not.toHaveLength(0),
+    );
     const settings = requestsTo("GET", "/api/v1/tenant/settings")[0];
     expect(settings?.headers.authorization).toBe("Bearer access-token");
   });
@@ -106,15 +102,20 @@ describe("session expiry", () => {
         : { body: SETTINGS },
     );
     stub("POST", "/api/v1/auth/refresh", { body: TOKENS });
-    stub("GET", "/api/v1/customers", { body: { items: [] } });
-    stub("GET", `/api/v1/service/day/${SETTINGS.business_date}`, {
-      body: { service_date: SETTINGS.business_date, business_date: SETTINGS.business_date, items: [] },
-    });
+    stubServer();
+    // stubServer would answer settings unconditionally; the 401-then-200 handler
+    // above is the one under test, so it is re-registered after it.
+    stub("GET", "/api/v1/tenant/settings", (_request, attempt) =>
+      attempt === 0
+        ? { status: 401, body: errorBody("UNAUTHENTICATED", "expired") }
+        : { body: SETTINGS },
+    );
 
     renderApp(<App />, "/today");
-    await screen.findByRole("navigation", { name: "Main" });
+    await waitFor(() =>
+      expect(requestsTo("GET", "/api/v1/tenant/settings")).toHaveLength(2),
+    );
 
-    expect(requestsTo("GET", "/api/v1/tenant/settings")).toHaveLength(2);
     expect(requestsTo("GET", "/api/v1/tenant/settings")[1]?.headers.authorization).toBe(
       "Bearer new-access",
     );

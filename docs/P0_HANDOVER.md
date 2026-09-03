@@ -61,9 +61,14 @@ monotonic `row_version` cursor for delta pull.
 
 **Payments — manual only (scope change).** V1 has no online gateway. The owner records `CASH`,
 `BANK_TRANSFER`, or `OTHER` payments; every financial behaviour is unchanged (full, partial, unpaid,
-overpayment credit, carry-forward, void/reversal, offline recording, outstanding-driven reminders,
-and a `COLLECTED_VALUE` commission basis over accepted manual payments). Duplicate protection rests
+overpayment credit, carry-forward, void/reversal, outstanding-driven reminders, and a
+`COLLECTED_VALUE` commission basis over accepted manual payments). Duplicate protection rests
 entirely on `operation_id`, since there is no provider reference to lean on.
+
+> **Corrected 2026-09-03 (P5).** "offline recording" was listed here among the retained payment
+> behaviours. Payment recording is **online-only in V1** — the offline write guarantee is CONFIRM
+> and SKIP alone (P0 §7.2 clarification, PAY-8). Nothing was removed: no offline payment path was
+> ever built.
 
 **Voice input (new first-class requirement).** Two experiences: voice search, which transcribes and
 then joins the existing read-only interpreter path; and voice daily entry, which produces a
@@ -277,9 +282,10 @@ directory, PayFast/JazzCash references, the five payment deferred decisions, and
 gateway-verification PAY invariant family and its A-SLOT proof.
 
 Kept intact: the `payment` entity, the append-only ledger, full/partial/unpaid/overpayment
-behaviour, carry-forward, payment history, governed void/reversal, offline manual recording,
-`operation_id` idempotency, outstanding-driven reminders, and `COLLECTED_VALUE` commission over
-accepted manual payments. The PAY family was rewritten around manual payments rather than deleted.
+behaviour, carry-forward, payment history, governed void/reversal, `operation_id` idempotency,
+outstanding-driven reminders, and `COLLECTED_VALUE` commission over accepted manual payments. The
+PAY family was rewritten around manual payments rather than deleted. (P5 corrected "offline manual
+recording" out of this list — see the note in §"Payments — manual only" above and PAY-8.)
 
 If online payments ever return, they arrive as a new provider port over an unchanged ledger. That
 is a smaller job than carrying the abstraction unused through V1.

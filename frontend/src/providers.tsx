@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ApiError } from "@/api/errors";
 import { AuthProvider } from "@/auth/AuthContext";
+import { SyncProvider } from "@/sync/SyncProvider";
 
 /**
  * The query client, and why its retry rule is what it is.
@@ -32,7 +33,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
   const [client] = useState(createQueryClient);
   return (
     <QueryClientProvider client={client}>
-      <AuthProvider>{children}</AuthProvider>
+      <AuthProvider>
+        <SyncProvider>{children}</SyncProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

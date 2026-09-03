@@ -36,6 +36,7 @@ from app.api.schemas import (
     RecordPaymentRequest,
     RecordServiceRequest,
     RefreshRequest,
+    SyncOperationsRequest,
     TokenResponse,
     UpdateCustomerRequest,
     VoidPaymentRequest,
@@ -85,7 +86,10 @@ from app.service.commands import (
     serialize_record,
     void_service,
 )
+from app.sync.changes import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, changes_since
+from app.sync.envelope import op_type_for_kind
 from app.sync.idempotency import execute_idempotent
+from app.sync.operations import SyncEnvelope, apply_operation
 from app.tenancy.context import TenantContext
 from app.tenancy.settings import tenant_settings
 
@@ -96,6 +100,7 @@ service_router = APIRouter(prefix="/api/v1/service", tags=["service"])
 billing_router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 statement_router = APIRouter(prefix="/api/v1/statements", tags=["billing"])
 payment_router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
+sync_router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 # P0 §15: the platform surface is a separate prefix, and every route on it is
 # gated by a commission capability no tenant role holds (SEC-5, COM-7).
 platform_commission_router = APIRouter(
@@ -288,7 +293,10 @@ def record_service_route(
         session,
         ctx,
         operation_id=body.operation_id,
-        op_type="service.record",
+        # The same op type a queued envelope carries for this kind, so a retry
+        # that changes transport is recognised as the same request (SYN-2/14)
+        # rather than refused as an operation_id reused for a different one.
+        op_type=op_type_for_kind(body.kind),
         payload=body.model_dump(mode="json", exclude={"operation_id"}),
         perform=lambda: record_service(
             session,
@@ -612,3 +620,51 @@ def record_commission_settlement_route(
         ),
     )
     return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+# --- sync (P0 §7.3, §7.4) ----------------------------------------------------
+
+
+@sync_router.post("/operations")
+def sync_operations_route(
+    body: SyncOperationsRequest,
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("service:record"))],
+) -> dict:
+    """Push a batch of queued operations and return one verdict for each.
+
+    Every entry is applied independently, in its own transaction, by the same
+    domain command the online route calls (SYN-8). A rejection or a conflict on
+    one entry is that entry's answer and nothing more: the others are unaffected.
+
+    The capability is ``service:record`` because that is what the two supported
+    operations require. There is no privileged sync capability, and admitting a
+    further op type means checking *its* capability, not widening this one.
+    """
+    results = [
+        apply_operation(
+            session,
+            ctx,
+            SyncEnvelope(
+                operation_id=envelope.operation_id,
+                op_type=envelope.op_type,
+                payload=envelope.payload,
+                client_created_at=envelope.client_created_at,
+            ),
+        )
+        for envelope in body.operations
+    ]
+    return {"results": [r.to_json() for r in results]}
+
+
+@sync_router.get("/changes")
+def sync_changes_route(
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("customer:read"))],
+    since: int = Query(default=0, ge=0),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+) -> dict:
+    """Tenant-scoped rows with ``row_version > since``, plus the next cursor."""
+    return changes_since(session, ctx, since=since, limit=limit)

@@ -324,6 +324,8 @@ class TestTenantScopingIsStructural:
         "app/commission/engine.py",
         "app/commission/settlements.py",
         "app/commission/reporting.py",
+        "app/sync/changes.py",
+        "app/sync/operations.py",
     ]
 
     @pytest.mark.parametrize("relative", QUERY_MODULES)

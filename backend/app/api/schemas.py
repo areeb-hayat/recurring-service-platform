@@ -8,11 +8,14 @@ JSON float, which cannot represent 0.1 exactly.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+from app.core.schema_types import QuantityStr
+from app.sync.envelope import ServiceOperationPayload
 
 __all__ = [
     "LoginRequest",
@@ -29,6 +32,8 @@ __all__ = [
     "VoidPaymentRequest",
     "CreateCommissionPlanRequest",
     "RecordCommissionSettlementRequest",
+    "SyncOperationEnvelope",
+    "SyncOperationsRequest",
     "OperationResponse",
 ]
 
@@ -44,8 +49,6 @@ EmailStr = Annotated[
         pattern=r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$",
     ),
 ]
-# Quantity as a string: "2", "1.5", "0.333". Rejects JSON floats outright.
-QuantityStr = Annotated[str, StringConstraints(strip_whitespace=True, max_length=24)]
 
 
 class _Base(BaseModel):
@@ -110,17 +113,17 @@ class UpdateCustomerRequest(_Base):
 # --- daily service ----------------------------------------------------------
 
 
-class RecordServiceRequest(_Base):
+class RecordServiceRequest(ServiceOperationPayload):
+    """The online transport for the same operation a device queues offline.
+
+    It *extends* the shared payload model rather than restating it, so SYN-8 —
+    "synchronised operations pass exactly the same validation as online ones" —
+    cannot drift: there is one definition of what a CONFIRM or a SKIP contains,
+    and both transports validate against it. ``operation_id`` is the only field
+    the HTTP body adds, because in a sync batch it belongs to the envelope.
+    """
+
     operation_id: uuid.UUID
-    customer_id: uuid.UUID
-    kind: Literal["SERVICE", "SKIP"] = "SERVICE"
-    quantity: QuantityStr | None = None
-    # Omit for "today". The server resolves today from the tenant timezone (R4);
-    # an explicit date is validated separately, never inferred from client time.
-    service_date: date | None = None
-    # Provenance only (VOI-8). P1 exposes no voice route; VOICE is accepted here
-    # so the column and its behaviour-neutrality are testable before P9.
-    input_method: Literal["BUTTON", "VOICE"] = "BUTTON"
 
 
 class CorrectServiceRequest(_Base):
@@ -201,6 +204,34 @@ class RecordCommissionSettlementRequest(_Base):
     settled_on: date | None = None
     reference: str | None = Field(default=None, max_length=120)
     note: str | None = Field(default=None, max_length=1000)
+
+
+# --- sync (P0 §7.2, §7.3) ----------------------------------------------------
+
+
+class SyncOperationEnvelope(_Base):
+    """One queued operation, exactly as P0 §7.2 froze the envelope.
+
+    ``payload`` is a plain object rather than a discriminated union because the
+    dispatcher validates it against the model for its ``op_type`` and returns a
+    per-operation ``REJECTED`` when it does not fit. A batch of fifty entries
+    must not be refused wholesale because one of them is malformed.
+
+    ``client_created_at`` is carried because P0 §7.2 defines it, and is advisory
+    only: nothing authoritative reads a device clock (R4).
+    """
+
+    operation_id: uuid.UUID
+    op_type: str = Field(max_length=64)
+    payload: dict[str, Any]
+    client_created_at: datetime | None = None
+    base_row_version: int | None = None
+
+
+class SyncOperationsRequest(_Base):
+    """A push batch. Bounded so one request cannot hold a transaction open all day."""
+
+    operations: list[SyncOperationEnvelope] = Field(min_length=1, max_length=200)
 
 
 class OperationResponse(_Base):

@@ -556,6 +556,16 @@ against `snapshot` only.
 `operation_id` is generated **once**, at the moment the user taps CONFIRM, and is never regenerated
 on retry. That single rule is what makes a lost response safe.
 
+> **Clarification — 2026-09-03 (P5).** The `op_type` list above is the envelope's *extensible
+> vocabulary*, not the set of operations a device may queue. **V1's offline write guarantee is
+> `service.record` and `service.skip` — CONFIRM and SKIP — and nothing else.** Payments, service
+> corrections and voids, and customer create/edit are online-only operations in V1: they keep this
+> same envelope shape, and admitting one later is a registry entry in `app/sync/envelope.py` plus a
+> client screen, not a redesign. `POST /sync/operations` refuses any other `op_type` with a
+> per-operation `REJECTED`. This narrows nothing that was ever built — §8.6 already made "the hard
+> offline guarantee" the button daily entry — it states the settled V1 product scope where the
+> enumeration above read as a promise.
+
 ### 7.3 Server protocol
 
 `POST /api/v1/sync/operations` accepts a batch and returns one result per operation, each processed

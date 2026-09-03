@@ -33,4 +33,11 @@ Thumbs.db
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/dev-dist/
 *.local
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/.playwright/

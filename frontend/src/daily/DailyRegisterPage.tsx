@@ -1,75 +1,66 @@
-import { useCallback, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 
-import { messageFor } from "@/api/errors";
-import { EmptyState, ErrorNotice, Loading } from "@/components/Feedback";
+import { EmptyState, Loading } from "@/components/Feedback";
+import { useSync } from "@/sync/SyncProvider";
 import { ServiceCard } from "./ServiceCard";
-import {
-  buildRegister,
-  useCustomersQuery,
-  useDayQuery,
-  useTenantSettingsQuery,
-  type RegisterEntry,
-} from "./useRegister";
+import { useRegister, type RegisterEntry } from "./useRegister";
 
 /**
- * The screen this product exists for.
+ * The screen this product exists for, now with no network on its critical path.
  *
  * One customer at a time, in a card big enough to use standing up and one-handed.
- * The rest of the round is listed underneath so the owner can jump to anyone out
- * of order — a real round is not a straight line — and so "who is left" is
- * visible without counting.
+ * Everything it renders comes from the device's snapshot of what the server said,
+ * so a stairwell, a basement or a dead SIM changes nothing about the round.
  *
- * After a save the card stays on that customer showing what was recorded, and the
- * person moves on deliberately with "Next customer". Advancing automatically
- * would mean the confirmation of one entry appears over the top of the next
- * customer's name, which is exactly how the wrong person gets recorded twice.
+ * The business date is printed in words at the top, deliberately, instead of the
+ * word "Today". Offline the snapshot may be carrying yesterday's date, and the
+ * person deserves to see which day their taps are being filed under before they
+ * make thirty of them.
  */
 export function DailyRegisterPage() {
-  const queryClient = useQueryClient();
-  const settings = useTenantSettingsQuery();
-  const day = useDayQuery(settings.data?.business_date);
-  const customers = useCustomersQuery();
+  const { register, loading, unavailable } = useRegister();
+  const { online, hydrated } = useSync();
   const [cursor, setCursor] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const register = useMemo(
-    () => (customers.data && day.data ? buildRegister(customers.data, day.data) : null),
-    [customers.data, day.data],
-  );
-
-  const refresh = useCallback(
-    (customerId: string) => {
-      // Stay on the customer just recorded so the result is read where it was
-      // made; the refetch turns the card into its recorded state.
-      setSelectedId(customerId);
-      void queryClient.invalidateQueries({ queryKey: ["day"] });
-    },
-    [queryClient],
-  );
-
-  const failure = settings.error ?? day.error ?? customers.error;
-  if (failure) {
+  const selected: RegisterEntry | undefined = useMemo(() => {
+    if (!register) return undefined;
+    const todo = [...register.pending, ...register.queued];
     return (
-      <ErrorNotice
-        message={messageFor(failure)}
-        onRetry={() => {
-          void settings.refetch();
-          void day.refetch();
-          void customers.refetch();
-        }}
-      />
+      (selectedId
+        ? register.entries.find((e) => e.customer.id === selectedId)
+        : undefined) ??
+      register.pending[Math.min(cursor, Math.max(register.pending.length - 1, 0))] ??
+      todo[0]
+    );
+  }, [register, selectedId, cursor]);
+
+  if (loading) return <Loading label="Loading today's round…" />;
+
+  if (unavailable || !register) {
+    return (
+      <div className="stack">
+        <p className="notice notice-error" role="alert">
+          {online
+            ? "We could not load the round. It will appear once this device has synchronised."
+            : "Unavailable offline. This device has not synchronised yet — connect once and the round will be available without a network."}
+        </p>
+      </div>
     );
   }
 
-  if (!register) return <Loading label="Loading today's round…" />;
+  const { pending, queued, done, entries, businessDate, settings } = register;
 
-  const { pending, done, entries, businessDate } = register;
-  const selected: RegisterEntry | undefined =
-    (selectedId ? entries.find((e) => e.customer.id === selectedId) : undefined) ??
-    pending[Math.min(cursor, Math.max(pending.length - 1, 0))];
+  // Two different "move on"s, and they are not the same movement.
+  //
+  // After a save the customer has *left* the pending list, so the list has
+  // already shifted under the cursor and the same index is now the next person.
+  // Incrementing here would step over somebody — which on a real round means a
+  // house missed in silence.
+  const afterSave = () => setSelectedId(null);
 
-  const advance = () => {
+  // "Leave for later" changes nothing, so the cursor has to do the moving.
+  const leaveForLater = () => {
     setSelectedId(null);
     setCursor((c) => (pending.length === 0 ? 0 : (c + 1) % pending.length));
   };
@@ -80,7 +71,14 @@ export function DailyRegisterPage() {
         <h1 className="day-title">{formatBusinessDate(businessDate)}</h1>
         <p className="day-progress" role="status">
           {done.length} of {entries.length} recorded
+          {queued.length > 0 ? ` · ${queued.length} waiting to sync` : ""}
         </p>
+        {!online && hydrated ? (
+          <p className="notice notice-pending" role="status">
+            Offline. Entries are saved on this device and sent when the connection
+            returns.
+          </p>
+        ) : null}
       </header>
 
       {entries.length === 0 ? (
@@ -88,37 +86,32 @@ export function DailyRegisterPage() {
       ) : null}
 
       {selected ? (
-        selected.record ? (
-          <section className="card stack" aria-labelledby="register-customer">
-            <h2 id="register-customer" className="customer-name">
-              {selected.customer.name}
-            </h2>
-            <p className="notice notice-success" role="status">
-              {selected.record.kind === "SKIP"
-                ? "Skipped today."
-                : `Recorded ${selected.record.quantity} ${selected.record.unit_label}.`}
-            </p>
-            <button className="btn btn-primary btn-lg" type="button" onClick={advance}>
-              Next customer
-            </button>
-          </section>
-        ) : (
-          <ServiceCard
-            key={selected.customer.id}
-            entry={selected}
-            position={Math.min(done.length + 1, entries.length)}
-            total={entries.length}
-            onRecorded={() => refresh(selected.customer.id)}
-            onNext={advance}
-          />
-        )
+        <ServiceCard
+          key={selected.customer.id}
+          entry={selected}
+          settings={settings}
+          position={Math.min(done.length + queued.length + 1, entries.length)}
+          total={entries.length}
+          onNext={afterSave}
+          onLeaveForLater={leaveForLater}
+          onQueued={setSelectedId}
+        />
       ) : null}
 
-      {pending.length === 0 && entries.length > 0 && !selected ? (
+      {pending.length === 0 && queued.length === 0 && entries.length > 0 && !selected ? (
         <EmptyState>Everyone is done for today.</EmptyState>
       ) : null}
 
-      <RoundList title={`Still to do (${pending.length})`} entries={pending} onPick={setSelectedId} />
+      <RoundList
+        title={`Still to do (${pending.length})`}
+        entries={pending}
+        onPick={setSelectedId}
+      />
+      <RoundList
+        title={`Waiting to sync (${queued.length})`}
+        entries={queued}
+        onPick={setSelectedId}
+      />
       <RoundList title={`Done (${done.length})`} entries={done} onPick={setSelectedId} />
     </div>
   );
@@ -138,23 +131,31 @@ function RoundList({
     <section className="round-list">
       <h2 className="round-title">{title}</h2>
       <ul className="list">
-        {entries.map(({ customer, record }) => (
-          <li key={customer.id}>
-            <button className="row" type="button" onClick={() => onPick(customer.id)}>
-              <span className="row-main">{customer.name}</span>
-              <span className="row-meta">
-                {record === null
-                  ? (customer.area ?? "")
-                  : record.kind === "SKIP"
-                    ? "Skipped"
-                    : `${record.quantity} ${record.unit_label}`}
-              </span>
+        {entries.map((entry) => (
+          <li key={entry.customer.id}>
+            <button className="row" type="button" onClick={() => onPick(entry.customer.id)}>
+              <span className="row-main">{entry.customer.name}</span>
+              <span className="row-meta">{describe(entry)}</span>
             </button>
           </li>
         ))}
       </ul>
     </section>
   );
+}
+
+/** Wording is the whole point: only a server record is ever called "recorded". */
+function describe(entry: RegisterEntry): string {
+  if (entry.record) {
+    return entry.record.kind === "SKIP"
+      ? "Skipped"
+      : `${entry.record.quantity} ${entry.record.unit_label}`;
+  }
+  if (entry.queued) {
+    const { kind, quantity, unit_label } = entry.queued.context;
+    return kind === "SKIP" ? "Skip · waiting to sync" : `${quantity} ${unit_label} · waiting to sync`;
+  }
+  return entry.customer.area ?? "";
 }
 
 /** Formatting only — the date itself is the server's business date, never derived. */

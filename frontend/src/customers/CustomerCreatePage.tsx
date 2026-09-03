@@ -4,10 +4,9 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { createCustomer, type CustomerDraft } from "@/api/customers";
 import type { Customer, OperationResult } from "@/api/types";
-import { ErrorNotice, Loading } from "@/components/Feedback";
-import { messageFor } from "@/api/errors";
+import { Loading } from "@/components/Feedback";
 import { usePendingOperation } from "@/daily/usePendingOperation";
-import { useTenantSettingsQuery } from "@/daily/useRegister";
+import { useLocalData } from "@/sync/useLocalData";
 import {
   CustomerForm,
   emptyValues,
@@ -22,27 +21,29 @@ import {
  * The quantity and price start from the tenant's own configured defaults, not
  * from numbers chosen here — the whole point of putting them on the tenant row
  * (P0 §4) is that a new customer inherits the business's normal terms without
- * anybody retyping them.
+ * anybody retyping them. They are read from the device's snapshot, so the form
+ * renders without a network — but creating a customer is **not** one of V1's
+ * offline operations, so the save itself needs the connection and says so.
  */
 export function CustomerCreatePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const settings = useTenantSettingsQuery();
+  const { settings, loading } = useLocalData();
   const [values, setValues] = useState<CustomerFormValues>(emptyValues);
   const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
-    if (seeded || !settings.data) return;
+    if (seeded || !settings) return;
     setValues((current) => ({
       ...current,
-      default_quantity: settings.data.default_quantity,
+      default_quantity: settings.default_quantity,
       unit_price_major: minorToMajor(
-        settings.data.default_unit_price_minor,
-        settings.data.currency_exponent,
+        settings.default_unit_price_minor,
+        settings.currency_exponent,
       ),
     }));
     setSeeded(true);
-  }, [seeded, settings.data]);
+  }, [seeded, settings]);
 
   const operation = usePendingOperation<CustomerDraft, OperationResult<Customer>>(
     (envelope) => createCustomer(envelope),
@@ -52,14 +53,17 @@ export function CustomerCreatePage() {
     },
   );
 
-  if (settings.isPending) return <Loading label="Loading…" />;
-  if (!settings.data) {
+  if (loading) return <Loading label="Loading…" />;
+  if (!settings) {
     return (
-      <ErrorNotice message={messageFor(settings.error)} onRetry={() => void settings.refetch()} />
+      <p className="notice notice-error" role="alert">
+        Unavailable offline. This device has not synchronised yet — connect once
+        and this form will know the business defaults.
+      </p>
     );
   }
 
-  const config = settings.data;
+  const config = settings;
 
   function submit() {
     const draft = toDraft(values, config.currency_exponent);

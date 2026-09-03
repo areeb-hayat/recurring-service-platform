@@ -520,3 +520,84 @@ h2 {
     transition: none !important;
   }
 }
+
+/* --- sync status ---------------------------------------------------------- */
+/* One quiet line in the app frame (P0 §7.5). It has to be readable at a glance
+   on a phone held at a doorstep, so it carries words rather than an icon, and
+   it never shows attempt counts, cursors or error codes. */
+
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+
+.sync-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+/* Needs Attention is the one state that must not read as ambient chrome: it
+   means a person has to look at something, and it stays until they do. */
+.sync-chip-attention {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 650;
+}
+
+.sync-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: var(--accent-ink);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.sync-action {
+  padding: 4px 8px;
+  min-height: 0;
+  font-size: 0.82rem;
+}
+
+/* Saved here, not there. The pending state is deliberately a different colour
+   from success: "waiting to sync" is not "recorded". */
+.notice-pending {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+/* --- needs attention ------------------------------------------------------ */
+
+.issue-list {
+  display: grid;
+  gap: 12px;
+}
+
+.issue-card {
+  padding: 16px;
+}
+
+.issue-customer {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 650;
+}

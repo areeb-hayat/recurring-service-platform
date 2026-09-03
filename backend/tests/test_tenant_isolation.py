@@ -257,7 +257,84 @@ class TestSEC4CrossTenantIsReported404:
         )
 
 
+class TestSEC4SyncRoutesAreTenantScoped:
+    """SEC-3/SEC-4 on the sync surface. A device syncs into its own tenant only."""
+
+    def test_SEC4_sync_cannot_record_against_other_tenants_customer(
+        self, client, tenant_a, tenant_b, a_customer
+    ):
+        """A-SYN-8: a foreign customer id is REJECTED with the online error code."""
+        resp = client.post(
+            "/api/v1/sync/operations",
+            json={
+                "operations": [
+                    {
+                        "operation_id": str(uuid7()),
+                        "op_type": "service.record",
+                        "payload": {"customer_id": a_customer["id"], "quantity": "1"},
+                    }
+                ]
+            },
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 200, resp.text
+        result = resp.json()["results"][0]
+        assert result["status"] == "REJECTED"
+        assert result["error"]["code"] == "NOT_FOUND"
+        # And nothing was created anywhere.
+        date = "2026-03-15"
+        assert client.get(f"/api/v1/service/day/{date}", headers=tenant_a.auth).json()[
+            "items"
+        ] == []
+
+    def test_SEC4_change_feed_never_returns_another_tenants_rows(
+        self, client, tenant_a, tenant_b, a_record
+    ):
+        feed = client.get("/api/v1/sync/changes", headers=tenant_b.auth).json()
+        entities = {c["entity"] for c in feed["changes"]}
+        assert entities <= {"tenant"}, feed["changes"]
+        ids = {c["id"] for c in feed["changes"]}
+        assert a_record["id"] not in ids
+        assert a_record["customer_id"] not in ids
+
+    def test_SEC4_change_feed_returns_this_tenants_rows(
+        self, client, tenant_a, a_record
+    ):
+        feed = client.get("/api/v1/sync/changes", headers=tenant_a.auth).json()
+        entities = {c["entity"] for c in feed["changes"]}
+        assert entities == {"tenant", "customer", "daily_service_record"}
+
+    def test_no_commission_entity_is_syncable(self, client, tenant_a, a_record):
+        feed = client.get("/api/v1/sync/changes", headers=tenant_a.auth).json()
+        assert not any("commission" in e for e in feed["entities"])
+        assert not any("commission" in c["entity"] for c in feed["changes"])
+
+
 class TestSEC6ScopeSeparation:
+    def test_SEC6_platform_token_rejected_on_sync_routes(
+        self, client, platform_token, a_customer
+    ):
+        """A platform principal has no tenant to sync into (SEC-6)."""
+        headers = {"Authorization": f"Bearer {platform_token}"}
+        push = client.post(
+            "/api/v1/sync/operations",
+            json={
+                "operations": [
+                    {
+                        "operation_id": str(uuid7()),
+                        "op_type": "service.record",
+                        "payload": {"customer_id": a_customer["id"], "quantity": "1"},
+                    }
+                ]
+            },
+            headers=headers,
+        )
+        assert push.status_code == 403
+        assert push.json()["error"]["code"] == "PERMISSION_DENIED"
+        pull = client.get("/api/v1/sync/changes", headers=headers)
+        assert pull.status_code == 403
+        assert pull.json()["error"]["code"] == "PERMISSION_DENIED"
+
     def test_SEC6_platform_token_rejected_on_tenant_routes(
         self, client, platform_token, a_customer
     ):
@@ -481,6 +558,8 @@ class TestRouteInventory:
         ("GET", "/api/v1/statements/{statement_id}"),
         ("POST", "/api/v1/payments"),
         ("POST", "/api/v1/payments/{payment_id}/void"),
+        ("POST", "/api/v1/sync/operations"),
+        ("GET", "/api/v1/sync/changes"),
     }
 
     PLATFORM_EXERCISED = {

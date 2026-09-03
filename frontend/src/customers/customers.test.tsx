@@ -3,7 +3,13 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { App } from "@/App";
-import { customer, errorBody, renderApp, SETTINGS, signedIn } from "@/test/fixtures";
+import {
+  customer,
+  errorBody,
+  renderApp,
+  signedIn,
+  stubServer,
+} from "@/test/fixtures";
 import { requestsTo, stub } from "@/test/http";
 
 const AYESHA = customer();
@@ -12,7 +18,7 @@ const DETAIL = { ...AYESHA, outstanding_minor: 125000, payment_status: "PARTIALL
 describe("the customer list", () => {
   it("lists customers with their code and area", async () => {
     signedIn();
-    stub("GET", "/api/v1/customers", { body: { items: [AYESHA] } });
+    stubServer({ customers: [AYESHA] });
 
     renderApp(<App />, "/customers");
 
@@ -22,8 +28,8 @@ describe("the customer list", () => {
 
   it("filters the loaded rows without asking the server again", async () => {
     signedIn();
-    stub("GET", "/api/v1/customers", {
-      body: { items: [AYESHA, customer({ id: "x", code: "C-002", name: "Bilal Ahmed" })] },
+    stubServer({
+      customers: [AYESHA, customer({ id: "x", code: "C-002", name: "Bilal Ahmed" })],
     });
 
     renderApp(<App />, "/customers");
@@ -38,7 +44,7 @@ describe("the customer list", () => {
 
   it("says so when there is nobody yet", async () => {
     signedIn();
-    stub("GET", "/api/v1/customers", { body: { items: [] } });
+    stubServer();
 
     renderApp(<App />, "/customers");
 
@@ -49,7 +55,7 @@ describe("the customer list", () => {
 describe("creating a customer", () => {
   it("starts from the tenant's configured defaults", async () => {
     signedIn();
-    stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
+    stubServer();
 
     renderApp(<App />, "/customers/new");
 
@@ -59,7 +65,7 @@ describe("creating a customer", () => {
 
   it("sends minor units, a string quantity, an operation_id and no tenant", async () => {
     signedIn();
-    stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
+    stubServer();
     stub("POST", "/api/v1/customers", {
       status: 201,
       body: { status: "APPLIED", entity: AYESHA },
@@ -86,7 +92,7 @@ describe("creating a customer", () => {
 
   it("names a duplicate code instead of showing the database error", async () => {
     signedIn();
-    stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
+    stubServer();
     stub("POST", "/api/v1/customers", {
       status: 409,
       body: errorBody("CUSTOMER_CODE_TAKEN", "a customer with code 'C-001' already exists"),
@@ -107,7 +113,7 @@ describe("creating a customer", () => {
 
   it("will not submit an unusable quantity", async () => {
     signedIn();
-    stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
+    stubServer();
 
     renderApp(<App />, "/customers/new");
     await screen.findByLabelText("Name");

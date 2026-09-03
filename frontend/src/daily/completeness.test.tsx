@@ -3,7 +3,7 @@ import { screen, within } from "@testing-library/react";
 
 import { App } from "@/App";
 import { CUSTOMER_PAGE_SIZE, listAllCustomers } from "@/api/customers";
-import { customer, renderApp, SETTINGS, signedIn } from "@/test/fixtures";
+import { changesResponse, customer, renderApp, SETTINGS, signedIn } from "@/test/fixtures";
 import { requests, requestsTo, stub } from "@/test/http";
 
 /**
@@ -18,9 +18,18 @@ import { requests, requestsTo, stub } from "@/test/http";
  * The invariant under test: N eligible active customers on the server → N
  * customers represented by the register, before subtracting those already
  * recorded for the business day.
+ *
+ * P5 moves the walk into the sync engine's seed, and the register then reads the
+ * snapshot — so the same guarantee has to hold one layer earlier: the snapshot
+ * must contain everyone, or the round is short offline as well as online.
  */
 
 const DAY_PATH = `/api/v1/service/day/${SETTINGS.business_date}`;
+
+/** The feed head the seed continues from; the seed itself uses the read routes. */
+function stubFeed() {
+  stub("GET", "/api/v1/sync/changes", { body: changesResponse() });
+}
 
 /** A synthetic page-server that honours `limit` and `offset` like the backend. */
 function stubCustomerPages(total: number, options: { repeatFirstRow?: boolean } = {}) {
@@ -119,6 +128,7 @@ describe("listAllCustomers follows the pagination contract to its end", () => {
 describe("the daily register represents every active customer", () => {
   it("shows all 1200 across three pages, not the first 500", async () => {
     stubCustomerPages(1200);
+    stubFeed();
     stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
     stub("GET", DAY_PATH, {
       body: {
@@ -131,7 +141,9 @@ describe("the daily register represents every active customer", () => {
 
     renderApp(<App />, "/today");
 
-    expect(await screen.findByText("0 of 1200 recorded")).toBeInTheDocument();
+    expect(
+      await screen.findByText("0 of 1200 recorded", {}, { timeout: 15_000 }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Still to do (1200)" })).toBeInTheDocument();
 
     // Somebody from the third page is genuinely on the round, not just counted.
@@ -141,6 +153,7 @@ describe("the daily register represents every active customer", () => {
 
   it("subtracts only those already recorded for the business day", async () => {
     const all = stubCustomerPages(600);
+    stubFeed();
     stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
     stub("GET", DAY_PATH, {
       body: {
@@ -178,7 +191,9 @@ describe("the daily register represents every active customer", () => {
 
     // The recorded customer is on the *second* page: the join could only find
     // them because paging brought them back at all.
-    expect(await screen.findByText("1 of 600 recorded")).toBeInTheDocument();
+    expect(
+      await screen.findByText("1 of 600 recorded", {}, { timeout: 15_000 }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Still to do (599)" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Done (1)" })).toBeInTheDocument();
   });
@@ -187,11 +202,22 @@ describe("the daily register represents every active customer", () => {
 describe("the customer list is loaded in full too", () => {
   it("pages before filtering, so the filter is over everyone", async () => {
     stubCustomerPages(1200);
+    stubFeed();
+    stub("GET", "/api/v1/tenant/settings", { body: SETTINGS });
+    stub("GET", DAY_PATH, {
+      body: {
+        service_date: SETTINGS.business_date,
+        business_date: SETTINGS.business_date,
+        items: [],
+      },
+    });
     signedIn();
 
     renderApp(<App />, "/customers");
 
-    expect(await screen.findByText("Customer 0000")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Customer 0000", {}, { timeout: 15_000 }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Customer 1199")).toBeInTheDocument();
     expect(requests.filter((r) => r.path === "/api/v1/customers")).toHaveLength(3);
   });

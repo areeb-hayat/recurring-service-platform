@@ -187,7 +187,7 @@ gateway-verification family, which is out of scope.
 | PAY-5 | Duplicate protection rests entirely on `operation_id` (SYN-2). Replaying a recorded payment creates nothing and returns the same logical result. |
 | PAY-6 | There is deliberately **no** amount/date natural-key deduplication: two genuine equal payments from the same customer on the same day are legal and must not be blocked. The UI warns on such a repeat; it never forbids it. |
 | PAY-7 | Voiding a payment appends a compensating payment-origin `ADJUSTMENT` ledger entry carrying reason, actor, and timestamp. The payment row is never mutated beyond `RECORDED → VOIDED` and never deleted (AUD-1, AUD-2). |
-| PAY-8 | Manual payment recording works offline and syncs under the ordinary outbox rules, with no privileged path and no relaxed validation (SYN-8). |
+| PAY-8 | Manual payment recording is **online-only in V1**. `payment.record` and `payment.void` are not accepted sync operations: `POST /sync/operations` refuses them, so no payment can be queued on a device. Should offline payments ever be admitted, they arrive under the ordinary outbox rules with no privileged path and no relaxed validation (SYN-8) — the envelope already supports it and the scope does not. *(Corrected in P5. The original wording promised offline payment recording; the settled V1 offline write guarantee is CONFIRM and SKIP alone — see the dated clarification at P0 §7.2. This is a scope correction, not a capability that was built and removed: no offline payment path ever existed.)* |
 | PAY-9 | Payments cannot be created, amended, or voided by voice in V1 (VOI-7). |
 
 ### Acceptance — PAY
@@ -208,8 +208,10 @@ gateway-verification family, which is out of scope.
 - **A-PAY-7** Void a 500 payment: outstanding returns to its pre-payment figure, a payment-origin
   `ADJUSTMENT` of +500 exists with reason/actor/timestamp, the original row survives as `VOIDED`,
   business generated is unchanged (A-FIN-14), and no delete route or ORM delete targets `payment`.
-- **A-PAY-8** Record a payment offline, restart the browser, sync: exactly one payment exists and
-  the same validation errors surface as online.
+- **A-PAY-8** Submit a `payment.record` operation to `POST /sync/operations`: it is `REJECTED` as
+  an operation this server does not accept, and **no payment, no ledger entry and no commission row
+  is created**. The same holds for `payment.void`. *(Rewritten in P5 with PAY-8 above; the previous
+  case asserted an offline payment flow that V1 does not have.)*
 
 ---
 
