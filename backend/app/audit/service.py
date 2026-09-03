@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import ActorScope, AuditEvent, AuditSource
 
-__all__ = ["record_audit_event", "snapshot", "AUDITABLE_FIELDS"]
+__all__ = [
+    "record_audit_event",
+    "record_tenant_event",
+    "record_system_event",
+    "snapshot",
+    "AUDITABLE_FIELDS",
+]
 
 # Only these fields are ever copied into before/after JSON.
 AUDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -80,6 +86,19 @@ AUDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
         "note",
     ),
     "app_user": ("email", "role", "status"),
+    "reminder": (
+        "customer_id",
+        "cycle_id",
+        "schedule_day",
+        "kind",
+        "amount_minor_at_generation",
+        "state",
+        "attempt_count",
+        "last_error",
+        "sent_at",
+        "cancelled_at",
+    ),
+    "job_run": ("kind", "business_date", "status", "triggered_by", "detail"),
     "operating_cost_item": ("code", "name", "description", "status"),
     "operating_cost_rate": (
         "cost_item_id",
@@ -196,5 +215,22 @@ def record_tenant_event(session: Session, ctx, **kwargs) -> AuditEvent:
         tenant_id=ctx.tenant_id,
         actor_user_id=ctx.user_id,
         actor_scope=ActorScope.TENANT,
+        **kwargs,
+    )
+
+
+def record_system_event(session: Session, ctx, **kwargs) -> AuditEvent:
+    """A scheduled job's audit row (AUD-9).
+
+    ``actor_user_id`` is NULL and the scope is ``SYSTEM``, because the cron is
+    not a person. Provenance is preserved rather than faked: a reader can always
+    tell a reminder the runner sent from one an owner re-dispatched by hand.
+    """
+    kwargs.setdefault("source", AuditSource.JOB)
+    return record_audit_event(
+        session,
+        tenant_id=ctx.tenant_id,
+        actor_user_id=None,
+        actor_scope=ActorScope.SYSTEM,
         **kwargs,
     )

@@ -853,3 +853,73 @@ fieldset.field > legend {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
+/* --- reminders (P7) -------------------------------------------------------- */
+
+/* A reminder row stacks on a phone: the name and the amount must both be
+   readable at 360px without either being truncated to nothing. */
+.reminder-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.reminder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reminder-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.reminder-detail {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.reminder-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reminder-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9rem;
+}
+
+/* Status colour carries meaning, so it is never the only signal: every badge
+   also spells its state out in words. */
+.badge-attention,
+.badge-failed {
+  border-color: var(--danger, #b42318);
+  color: var(--danger, #b42318);
+}
+
+.badge-due,
+.badge-now {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.badge-settled,
+.badge-sent {
+  color: var(--ink-soft);
+}
+
+/* The retry control is a real target on a phone; it is the one action here. */
+.reminder-retry .btn {
+  min-height: var(--tap);
+}

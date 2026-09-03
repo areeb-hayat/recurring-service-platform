@@ -39,7 +39,11 @@ export type OpType =
   | "cost.item.create"
   | "cost.rate.create"
   | "cost.usage.record"
-  | "cost.actual.record";
+  | "cost.actual.record"
+  // Online-only (P7 §19). Reminder generation and delivery are server-only, so
+  // this never enters the outbox — it is a manual re-dispatch of a stage the
+  // server already created, not a write a device may queue.
+  | "reminder.send";
 
 export interface OperationEnvelope<P> {
   operation_id: string;

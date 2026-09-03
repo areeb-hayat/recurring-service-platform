@@ -10,10 +10,10 @@ satisfies them.
 ## Current phase
 
 P0 (architecture freeze), P1 (backend & data foundation), P2 (financial engine), P3
-(commercial tracking / commission), P4 (customer & daily UI), P5 (offline & sync) and P6
-(owner financial dashboard & operating costs) are complete — see `docs/P1_HANDOVER.md`
-through `docs/P6_HANDOVER.md`. The backend lives in `backend/` and the frontend in
-`frontend/`.
+(commercial tracking / commission), P4 (customer & daily UI), P5 (offline & sync), P6
+(owner financial dashboard & operating costs) and P7 (reminder engine) are complete —
+see `docs/P1_HANDOVER.md` through `docs/P7_HANDOVER.md`. The backend lives in `backend/`
+and the frontend in `frontend/`.
 P2 added billing cycles, posting-cycle resolution, immutable statements, manual payments with
 void, the derived payment status and the §11.1 reporting derivations. P3 added the four
 commission tables, the four earning bases, snapshotted terms, signed adjustments, aggregate
@@ -44,9 +44,35 @@ the business owes the platform; `operating_cost_*` is what the business owes its
 are never summed, never share a table, and never share a capability (`cost:read` / `cost:write`
 were added to `OWNER_ADMIN`). No provider price is hard-coded — every rate is a row.
 
-Do not skip ahead: no reminders, no AI and no voice before their package. P1–P6 deliberately
-contain no adapter and make no network call to any provider — P6 *records* provider expenses, it
-does not fetch a vendor invoice.
+**P7 built the reminder engine.** The frozen schedule (day 1 statement, days 4 / 8 / 12
+reminders, day 15 final plus owner alert) lives on `tenant.reminder_schedule` and is read
+through `app/reminders/schedule.py` — no schedule day is written down in business logic.
+Three tables joined the schema (`reminder`, `communication_log`, `job_run`), completing the
+set P0 §6 named. The host's cron calls `POST /internal/jobs/run-daily` with a shared secret;
+the runner iterates every active tenant on that tenant's own business date.
+
+**Catch-up is by stage, never by replaying missed dates.** Each run sends at most **one**
+customer-facing stage — the highest configured day ≤ today — so an outage costs the
+intermediate nudges instead of delivering them all at once. The amount is always the
+current authoritative outstanding recomputed at send time; a partial payment lowers it and
+a full payment cancels the stage. The `reminder` unique key
+`(tenant, customer, cycle, schedule_day, kind)` is the correctness guarantee; `job_run` is
+only a same-day short-circuit. A reminder chases the customer's **latest issued statement**,
+so no statement means no reminder rather than a fabricated amount.
+
+**P7 declares the first port, `CommunicationProvider`, and the first adapter.** The
+application decides who, which stage, how much and whether to suppress; the provider only
+delivers, and it is handed an *already-rendered* amount string — `OutboundMessage` rejects a
+non-string param or any key ending in `_minor`. `MockCommunicationProvider` is the only
+implementation and makes no network call. Reminders are **server-only**: no reminder write
+enters the P5 outbox, no reminder table carries `row_version`, and `SYNC_FEED_VERSION` stays
+**2**.
+
+Do not skip ahead: no AI and no voice before their package, and **no real messaging transport
+before P10** — no n8n, Evolution, WhatsApp, Meta Cloud API, SMS gateway, GSM modem or Android
+relay. `Channel.SMS` exists as a port value only; P10 may add SMS as a second channel on the
+unchanged port, and connects real messaging usage to P6's operating costs. P1–P7 make no
+network call to any provider — P6 *records* provider expenses, and P7 *records* what to send.
 
 Run the backend tests with a real PostgreSQL — never SQLite:
 
@@ -153,6 +179,17 @@ used, so a later rate change never restates it. Money stays integer minor units,
 `Decimal`, and amounts stay in the provider's own currency — there is no FX feature and totals are
 per currency. No usage means no estimate and no invoice means no actual: never a zero.
 
+**Reminders decide nothing outside this application.** The schedule, the eligibility, the
+amount and the suppression are the server's; a delivery provider only delivers, and receives a
+rendered string rather than a balance or a rule. A run sends at most one customer-facing stage
+per customer per cycle — always the latest due one — so an outage can never produce a burst.
+The amount is the current authoritative outstanding read at send time, never a statement total
+and never a previous reminder's figure; outstanding ≤ 0 stops every further outstanding
+reminder in that cycle. A communication failure writes only to `communication_log` and the
+reminder's own state: it can never move a balance, a statement, a payment or a commission row.
+Reminder history has no delete path. Reminder generation and delivery are **server-only** — no
+reminder operation belongs in the offline outbox.
+
 **Platform commission is protected.** Tenant users have no read and no write access to commission
 plans, events, adjustments, or settlements. Only the platform scope does. Commission is earned by
 the server inside the transaction that accepts the source business event, never by a client; every
@@ -186,9 +223,9 @@ authoritative and always available whatever happens to voice.
 app/core       money, ids, time, config, security primitives
 app/<domain>   tenancy identity customers service billing payments
                commission costs reminders sync search voice
-app/ports      CommunicationProvider, SpeechToTextProvider,
+app/ports      CommunicationProvider (P7), SpeechToTextProvider,
                SearchInterpreter, OperationalIntentInterpreter (Protocols)
-app/adapters   comms/ speech/ ai/ — mock + real implementations
+app/adapters   comms/ (mock only) — speech/ and ai/ belong to P9 and P8
 app/api        HTTP routers (thin: auth, validate, call domain, serialize)
 app/jobs       daily job entrypoints
 ```
@@ -203,6 +240,7 @@ frontend/src/dashboard  the owner overview
 frontend/src/statements issued statements: list and detail
 frontend/src/payments   manual payment recording (online only)
 frontend/src/costs      operating costs: rates, usage, invoices, scenarios
+frontend/src/reminders  where each customer stands in the schedule (online only)
 frontend/src/lib        exact quantity arithmetic, money display/parsing, uuidv7
 frontend/src/sync       IndexedDB stores, the sync engine, sync status, Needs Attention
 frontend/e2e            Playwright acceptance suite and its fixture server

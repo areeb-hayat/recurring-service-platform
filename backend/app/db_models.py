@@ -2,8 +2,9 @@
 
 Adding a model here is a deliberate act. The per-package sets below are what the
 schema-assertion test compares the live database against, so a stray future table
-cannot appear unnoticed — reminder, communication_log and job_run still belong to
-later packages and must stay absent.
+cannot appear unnoticed. P7 adds the last three P0 §6 named — reminder,
+communication_log and job_run — so nothing from the frozen schema is outstanding;
+a new table from here on is a new decision, not a deferred one.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ __all__ = [
     "P2_TABLES",
     "P3_TABLES",
     "P6_TABLES",
+    "P7_TABLES",
     "ALL_TABLES",
 ]
 
@@ -62,7 +64,14 @@ P6_TABLES = frozenset(
     }
 )
 
-ALL_TABLES = P1_TABLES | P2_TABLES | P3_TABLES | P6_TABLES
+# The exact set P7 adds (P0 §6, §10). ``reminder`` is the stage register,
+# ``communication_log`` the append-only delivery history, ``job_run`` the
+# same-business-date guard for the cron. None carries ``row_version``: reminder
+# generation and delivery are server-only, so none of them is a client sync
+# entity and no reminder write ever enters the P5 outbox.
+P7_TABLES = frozenset({"reminder", "communication_log", "job_run"})
+
+ALL_TABLES = P1_TABLES | P2_TABLES | P3_TABLES | P6_TABLES | P7_TABLES
 
 
 def import_all_models() -> None:
@@ -73,6 +82,7 @@ def import_all_models() -> None:
     from app.customers import models as _customers  # noqa: F401
     from app.identity import models as _identity  # noqa: F401
     from app.payments import models as _payments  # noqa: F401
+    from app.reminders import models as _reminders  # noqa: F401
     from app.service import models as _service  # noqa: F401
     from app.sync import models as _sync  # noqa: F401
     from app.tenancy import models as _tenancy  # noqa: F401

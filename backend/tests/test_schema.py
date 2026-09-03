@@ -47,11 +47,9 @@ class TestTableInventory:
     @pytest.mark.parametrize(
         "forbidden",
         [
-            # Later packages — must not exist yet.
-            "reminder",
-            "communication_log",
-            "job_run",
-            # Removed from scope entirely / never to exist.
+            # Removed from scope entirely / never to exist. ``reminder``,
+            # ``communication_log`` and ``job_run`` left this list in P7, which
+            # creates them — every table P0 §6 named now exists.
             "payment_attempt",
             "payment_provider",
             # COM-11: V1 settles in aggregate. A settlement-allocation table is a

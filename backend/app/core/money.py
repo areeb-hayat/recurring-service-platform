@@ -32,6 +32,7 @@ __all__ = [
     "apply_rate_bp",
     "round_half_up",
     "multiply_minor",
+    "format_minor",
 ]
 
 QUANTITY_SCALE = 3
@@ -232,3 +233,43 @@ def apply_rate_bp(base_amount_minor: int, rate_bp: int) -> int:
         ctx.prec = 50
         product = Decimal(base_amount_minor) * Decimal(rate) / Decimal(RATE_BP_SCALE)
     return round_half_up(product)
+
+
+def format_minor(amount_minor: int, currency: str, currency_exponent: int) -> str:
+    """Render an amount for a *human being to read*, never for a machine to parse.
+
+    REM-7 is why this exists on the server. A reminder hands its delivery
+    provider a finished string — "PKR 3,000.00" — and never the integer, the
+    exponent or a formula, so no provider can compute, re-round or misinterpret
+    an amount. The provider delivers; it does not do arithmetic.
+
+    Deliberately locale-free: grouping by three with a full stop for the
+    fractional part, which is what the tenant's own currency configuration
+    already implies and what a phone message needs. Nothing parses this back.
+
+    >>> format_minor(300000, "PKR", 2)
+    'PKR 3,000.00'
+    >>> format_minor(0, "PKR", 2)
+    'PKR 0.00'
+    >>> format_minor(-4500, "USD", 2)
+    'USD -45.00'
+    >>> format_minor(120, "JPY", 0)
+    'JPY 120'
+    """
+    _reject_float(amount_minor, MoneyError, "amount_minor")
+    if isinstance(amount_minor, bool) or not isinstance(amount_minor, int):
+        raise MoneyError(
+            f"amount_minor must be an int in minor units (got {type(amount_minor).__name__})"
+        )
+    if not 0 <= currency_exponent <= 4:
+        raise MoneyError(f"currency_exponent must be 0..4 (got {currency_exponent})")
+
+    with localcontext() as ctx:
+        ctx.prec = 50
+        major = Decimal(amount_minor).scaleb(-currency_exponent)
+    sign = "-" if major < 0 else ""
+    digits = f"{abs(major):.{currency_exponent}f}"
+    whole, _, fraction = digits.partition(".")
+    grouped = f"{int(whole):,}"
+    number = f"{grouped}.{fraction}" if fraction else grouped
+    return f"{currency} {sign}{number}"

@@ -4,10 +4,16 @@ P0 §13: secrets and deployment-specific values come from environment variables
 only; per-tenant business configuration (currency, unit label, timezone, cycle,
 reminder schedule, default price) lives on the ``tenant`` row, never here.
 
-Only the settings P1 actually uses are declared. The reserved names from P0 §13
-(``GROQ_API_KEY``, ``SPEECH_PROVIDER``, ``COMMS_PROVIDER`` …) are documented in
-``.env.example`` but deliberately not loaded: P1 implements no adapter, and an
-unused setting is a claim that something is wired up when it is not.
+Only the settings the code actually uses are declared. A reserved P0 §13 name
+that nothing reads stays in ``.env.example`` and out of here: an unused setting
+is a claim that something is wired up when it is not.
+
+P7 loads the first two of them. ``COMMS_PROVIDER`` selects a communication
+adapter, and ``INTERNAL_JOB_SECRET`` authenticates the host's cron against the
+job endpoint. Both have safe postures rather than convenient ones: the provider
+defaults to the mock (which sends nothing) and the job secret has **no default**,
+so a deployment that forgot to set it gets a refused job rather than an open
+"send reminders to everybody" endpoint.
 """
 
 from __future__ import annotations
@@ -37,6 +43,13 @@ class Settings(BaseSettings):
     access_token_minutes: int = 60  # P0 §3.3
     refresh_token_days: int = 30  # P0 §3.3
 
+    # P7 §7: which communication adapter is wired in. ``mock`` records messages
+    # in memory and sends nothing; a real transport is P10.
+    comms_provider: str = "mock"
+    # P7 §15: the shared secret the host's cron presents to POST
+    # /internal/jobs/run-daily. Empty means the endpoint is disabled, never open.
+    internal_job_secret: str = Field(default="", description="cron shared secret")
+
     environment: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
     cors_origins: str = ""
@@ -60,6 +73,21 @@ class Settings(BaseSettings):
                 "and fill it in."
             )
         return self.database_url
+
+    def require_internal_job_secret(self) -> str:
+        """The cron secret, or a refusal.
+
+        Fails closed, and loudly. An unauthenticated public endpoint that sends
+        every customer a dunning message is the one thing this route must never
+        become, so a missing secret disables it rather than opening it.
+        """
+        if not self.internal_job_secret:
+            raise RuntimeError(
+                "INTERNAL_JOB_SECRET is not set, so the scheduled job endpoint is "
+                "disabled. Generate one with: "
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+        return self.internal_job_secret
 
     def require_jwt_secret(self) -> str:
         if not self.jwt_secret:

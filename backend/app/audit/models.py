@@ -49,6 +49,17 @@ class AuditAction:
     OPERATING_COST_USAGE_CORRECTED = "operating_cost_usage.corrected"
     OPERATING_COST_ACTUAL_RECORDED = "operating_cost_actual.recorded"
     OPERATING_COST_ACTUAL_CORRECTED = "operating_cost_actual.corrected"
+    # P7 reminders. A reminder is a communication, not a financial mutation, so
+    # these actions are deliberately named apart from anything in the ledger.
+    # Only meaningful events are recorded: a run that produced nothing writes one
+    # row for the run and no per-customer noise.
+    REMINDER_RUN_COMPLETED = "reminder_run.completed"
+    REMINDER_GENERATED = "reminder.generated"
+    REMINDER_SENT = "reminder.sent"
+    REMINDER_FAILED = "reminder.failed"
+    REMINDER_CANCELLED = "reminder.cancelled"
+    REMINDER_OWNER_ALERTED = "reminder.owner_alerted"
+    REMINDER_REDISPATCHED = "reminder.redispatched"
     AUTH_LOGIN_SUCCEEDED = "auth.login_succeeded"
     AUTH_LOGIN_FAILED = "auth.login_failed"
     AUTH_TOKEN_REFRESHED = "auth.token_refreshed"

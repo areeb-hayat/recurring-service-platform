@@ -7,6 +7,7 @@ never from a path, query or body parameter, and rejects platform principals.
 
 from __future__ import annotations
 
+import hmac
 import uuid
 from typing import Annotated, Iterator
 
@@ -16,10 +17,11 @@ from sqlalchemy.orm import Session
 from app.core.clock import Clock, SystemClock
 from app.core.config import Settings, get_settings
 from app.core.db import session_scope
-from app.core.errors import AuthenticationError, NotFoundError
+from app.core.errors import AuthenticationError, JobEndpointDisabledError, NotFoundError
 from app.core.security import decode_access_token
 from app.identity.capabilities import require
 from app.identity.service import principal_from_claims
+from app.ports.comms import CommunicationProvider
 from app.tenancy.context import PlatformContext, Principal, TenantContext
 from app.tenancy.models import Tenant
 
@@ -30,6 +32,8 @@ __all__ = [
     "require_tenant_context",
     "build_platform_context",
     "require_capability",
+    "get_communication_provider",
+    "require_job_secret",
     "CurrentPrincipal",
     "Db",
 ]
@@ -129,3 +133,52 @@ def require_capability(capability: str):
         return principal
 
     return _check
+
+
+def get_communication_provider(request: Request) -> CommunicationProvider:
+    """The configured delivery provider, built once per application.
+
+    The **only** place the application chooses an implementation, which is what
+    keeps A-SLOT-5 true: ``app/reminders`` imports the port and takes the
+    provider as an argument, so no domain module has ever heard of an adapter.
+    Tests override ``app.state.communication_provider`` with a fake and never
+    make a live call.
+    """
+    provider = getattr(request.app.state, "communication_provider", None)
+    if provider is None:
+        from app.adapters.comms import build_communication_provider
+
+        settings = get_app_settings(request)
+        provider = build_communication_provider(settings.comms_provider)
+        request.app.state.communication_provider = provider
+    return provider
+
+
+def require_job_secret(
+    request: Request,
+    x_job_secret: Annotated[str | None, Header()] = None,
+) -> None:
+    """Authenticate the host's cron against the internal job endpoint (P0 §12).
+
+    A shared secret rather than a bearer token, because the caller is a crontab
+    line and not a person: there is no user to attribute the run to, which is
+    why everything it writes is audited as ``SYSTEM``/``JOB``.
+
+    Three properties this must have, and each is deliberate:
+
+    * **Never open.** An unset ``INTERNAL_JOB_SECRET`` disables the route (503),
+      it does not skip the check. A public "send reminders to everybody" URL is
+      the worst failure this endpoint could have.
+    * **Constant-time.** Compared with :func:`hmac.compare_digest`, so the secret
+      cannot be recovered a character at a time.
+    * **No tenant authority.** Presenting it grants no scope over any tenant's
+      data: the route takes no tenant parameter, and the runner builds its own
+      per-tenant context from the tenants the *server* found.
+    """
+    settings = get_app_settings(request)
+    try:
+        expected = settings.require_internal_job_secret()
+    except RuntimeError as exc:
+        raise JobEndpointDisabledError(str(exc)) from exc
+    if not x_job_secret or not hmac.compare_digest(x_job_secret, expected):
+        raise AuthenticationError("invalid or missing job secret")

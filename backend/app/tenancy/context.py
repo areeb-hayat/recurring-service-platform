@@ -16,7 +16,7 @@ from typing import Literal
 from app.core.clock import Clock, business_date
 from app.core.errors import PermissionDeniedError
 
-__all__ = ["Principal", "TenantContext", "PlatformContext", "Scope"]
+__all__ = ["Principal", "TenantContext", "PlatformContext", "SystemContext", "Scope"]
 
 Scope = Literal["TENANT", "PLATFORM"]
 
@@ -132,4 +132,57 @@ class PlatformContext:
             today=business_date(now, tenant.timezone),
             currency=tenant.currency,
             currency_exponent=tenant.currency_exponent,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SystemContext:
+    """The scheduled runner's scope over one tenant (P0 §10, §12).
+
+    A third context type rather than a flag, for the same reason
+    :class:`PlatformContext` is one: the cron has *no user*, holds no token and
+    passes no capability check, and pretending otherwise would mean inventing a
+    service account whose audit rows are indistinguishable from a person's.
+    ``user_id`` is therefore ``None``, and everything it writes is audited with
+    ``actor_scope = SYSTEM`` and ``source = JOB`` (AUD-9).
+
+    The target tenant is never a caller's choice. The job endpoint takes no
+    tenant parameter at all; the runner iterates the tenants the *server* found
+    and builds one of these per tenant, which is what makes "the cron cannot be
+    used as a tenant escape" structural rather than a check.
+
+    It carries the same business configuration a :class:`TenantContext` does,
+    because the reminder engine renders amounts in the tenant's own currency and
+    resolves the tenant's own business date (P0 R4).
+    """
+
+    tenant_id: uuid.UUID
+    role: str
+    timezone: str
+    now: datetime
+    today: date
+    unit_label: str
+    currency: str
+    currency_exponent: int
+    cycle_type: str
+    cycle_start_day: int
+    #: Always None. A job has no actor, and no audit row may claim it had one.
+    user_id: None = None
+
+    SYSTEM_ROLE = "SYSTEM"
+
+    @classmethod
+    def for_tenant(cls, *, tenant, clock: Clock) -> "SystemContext":
+        now = clock.now_utc()
+        return cls(
+            tenant_id=tenant.id,
+            role=cls.SYSTEM_ROLE,
+            timezone=tenant.timezone,
+            now=now,
+            today=business_date(now, tenant.timezone),
+            unit_label=tenant.unit_label,
+            currency=tenant.currency,
+            currency_exponent=tenant.currency_exponent,
+            cycle_type=tenant.cycle_type,
+            cycle_start_day=tenant.cycle_start_day,
         )

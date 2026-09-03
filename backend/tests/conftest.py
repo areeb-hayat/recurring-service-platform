@@ -35,6 +35,7 @@ from app.tenancy.context import TenantContext
 import_all_models()
 
 TEST_JWT_SECRET = "test-only-not-a-real-secret-" + "x" * 24
+TEST_JOB_SECRET = "test-only-job-secret-" + "y" * 24
 OWNER_PASSWORD = "owner-password-for-tests"
 PLATFORM_PASSWORD = "platform-password-for-tests"
 
@@ -121,16 +122,33 @@ def settings() -> Settings:
     return Settings(
         database_url=_database_url() or "",
         jwt_secret=TEST_JWT_SECRET,
+        internal_job_secret=TEST_JOB_SECRET,
         environment="test",
     )
 
 
 @pytest.fixture
-def app(settings, session_factory, clock):
+def comms():
+    """The in-memory communication provider. No test ever makes a live call."""
+    from app.adapters.comms.mock import MockCommunicationProvider
+
+    return MockCommunicationProvider()
+
+
+@pytest.fixture
+def app(settings, session_factory, clock, comms):
     application = create_app(settings)
     application.state.session_factory = session_factory
     application.state.clock = clock
+    # P0 §9: the mock is the test default, injected rather than constructed by
+    # the route, so a test can inspect exactly what would have been sent.
+    application.state.communication_provider = comms
     return application
+
+
+@pytest.fixture
+def job_headers() -> dict[str, str]:
+    return {"X-Job-Secret": TEST_JOB_SECRET}
 
 
 @pytest.fixture

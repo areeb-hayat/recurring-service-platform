@@ -11,6 +11,7 @@ import { DailyRegisterPage } from "@/daily/DailyRegisterPage";
 import { DashboardPage } from "@/dashboard/DashboardPage";
 import { OperatingCostsPage } from "@/costs/OperatingCostsPage";
 import { RecordPaymentPage } from "@/payments/RecordPaymentPage";
+import { RemindersPage } from "@/reminders/RemindersPage";
 import { StatementsPage } from "@/statements/StatementsPage";
 import { IssuesPage } from "@/sync/IssuesPage";
 
@@ -22,9 +23,14 @@ import { IssuesPage } from "@/sync/IssuesPage";
  * than something you are shown while standing at a door. `/attention` is P5's
  * durable home for operations the server refused.
  *
- * P6 adds the owner-facing half — the overview, issued statements, recording a
- * payment, and what the business pays its own providers. Reminders, search,
- * voice and the platform surface are still absent: their packages have not run.
+ * P6 added the owner-facing half — the overview, issued statements, recording a
+ * payment, and what the business pays its own providers. P7 adds `/reminders`:
+ * where each customer stands in the month's schedule, and the one manual action
+ * on it, a re-attempt of a failed delivery. Reminders themselves are sent by the
+ * server's daily run, so there is no route here that sends one.
+ *
+ * Search, voice and the platform surface are still absent: their packages have
+ * not run.
  */
 export function App() {
   const { session } = useAuth();
@@ -49,6 +55,7 @@ export function App() {
         <Route path="/customers/:customerId" element={<CustomerDetailPage />} />
         <Route path="/customers/:customerId/pay" element={<RecordPaymentPage />} />
         <Route path="/statements" element={<StatementsPage />} />
+        <Route path="/reminders" element={<RemindersPage />} />
         <Route path="/operating-costs" element={<OperatingCostsPage />} />
         <Route path="/attention" element={<IssuesPage />} />
       </Route>

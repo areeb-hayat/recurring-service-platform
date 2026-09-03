@@ -11,9 +11,10 @@ import { useSync } from "@/sync/SyncProvider";
  * `styles.css`) — the daily register is used one-handed while standing at a door,
  * so its controls belong within thumb reach.
  *
- * P6 adds three owner-facing destinations. They are ordered by how often they
- * are opened, not by importance: Today first, because that is the round;
- * Overview and Customers next; Statements and Running costs after, since they
+ * P6 added three owner-facing destinations, and P7 adds Reminders. They are
+ * ordered by how often they are opened, not by importance: Today first, because
+ * that is the round; Overview and Customers next; Reminders beside them, since
+ * chasing money is a weekly job; Statements and Running costs after, since they
  * are looked at monthly. Running costs is deliberately worded as a business
  * expense and sits nowhere near anything a customer owes.
  *
@@ -49,6 +50,9 @@ export function AppShell() {
         </NavLink>
         <NavLink to="/customers" className={navClass}>
           Customers
+        </NavLink>
+        <NavLink to="/reminders" className={navClass}>
+          Reminders
         </NavLink>
         <NavLink to="/statements" className={navClass}>
           Statements

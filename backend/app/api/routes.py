@@ -23,7 +23,9 @@ from app.api.deps import (
     build_platform_context,
     get_app_settings,
     get_clock,
+    get_communication_provider,
     require_capability,
+    require_job_secret,
 )
 from app.api.schemas import (
     CloseCycleRequest,
@@ -42,6 +44,7 @@ from app.api.schemas import (
     RecordPaymentRequest,
     RecordServiceRequest,
     RefreshRequest,
+    SendReminderRequest,
     SyncOperationsRequest,
     TokenResponse,
     UpdateCustomerRequest,
@@ -98,6 +101,7 @@ from app.customers.commands import (
     update_customer,
 )
 from app.identity import service as auth_service
+from app.jobs.daily import run_daily
 from app.payments.commands import (
     RecordPaymentInput,
     VoidPaymentInput,
@@ -106,6 +110,13 @@ from app.payments.commands import (
     record_payment,
     serialize_payment,
     void_payment,
+)
+from app.ports.comms import CommunicationProvider
+from app.reminders.engine import dispatch_reminder, serialize_reminder
+from app.reminders.reporting import (
+    load_reminder_for_tenant,
+    reminder_detail,
+    reminder_overview,
 )
 from app.service.commands import (
     CorrectServiceInput,
@@ -137,7 +148,14 @@ dashboard_router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 # pays its providers is not what a customer owes it and not what the platform
 # earns from it.
 cost_router = APIRouter(prefix="/api/v1/operating-costs", tags=["operating-costs"])
+# P7. Read and manual re-dispatch only: there is no "create a reminder" route and
+# no way for a caller to choose a stage, an amount or a recipient. Those are the
+# engine's, and the schedule's.
+reminder_router = APIRouter(prefix="/api/v1/reminders", tags=["reminders"])
 sync_router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
+# P0 §12, §15: driven by the host's cron with a shared secret, never by a user
+# token. Deliberately outside every tenant prefix and taking no tenant parameter.
+internal_job_router = APIRouter(prefix="/api/v1/internal/jobs", tags=["internal"])
 # P0 §15: the platform surface is a separate prefix, and every route on it is
 # gated by a commission capability no tenant role holds (SEC-5, COM-7).
 platform_commission_router = APIRouter(
@@ -1004,6 +1022,112 @@ def cost_scenarios_route(
         period_month=month_start(body.period_month or ctx.today),
         scenarios=scenarios,
     )
+
+
+# --- reminders (P0 §10, §15) -------------------------------------------------
+#
+# Two routes, and neither of them decides anything a reminder depends on. The
+# owner reads the work list and may re-dispatch a delivery that failed; who is
+# eligible, which stage is due and what the amount is are the engine's, computed
+# from the schedule and the ledger. There is no route that creates a reminder, no
+# route that sets an amount, and no unauthenticated way to send anything.
+#
+# ``reminder:read`` and ``reminder:trigger`` are tenant capabilities the platform
+# role does not hold, so a platform token is refused here exactly as an owner
+# token is refused on the commission surface (SEC-5, SEC-6).
+
+
+@reminder_router.get("")
+def list_reminders_route(
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("reminder:read"))],
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    """Who owes what, and where each customer is in this cycle's schedule.
+
+    Every figure — the outstanding, the stage, the derived status — is computed
+    here from the ledger and the tenant's own schedule. The client filters and
+    renders; it recomputes nothing (SYN-9).
+    """
+    return reminder_overview(session, ctx, limit=limit, offset=offset)
+
+
+@reminder_router.get("/{reminder_id}")
+def get_reminder_route(
+    reminder_id: uuid.UUID,
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("reminder:read"))],
+) -> dict:
+    """One reminder and every delivery attempt made for it."""
+    return reminder_detail(session, ctx, reminder_id)
+
+
+@reminder_router.post("/{reminder_id}/send", response_model=OperationResponse)
+def send_reminder_route(
+    reminder_id: uuid.UUID,
+    body: SendReminderRequest,
+    ctx: TenantCtx,
+    session: Db,
+    provider: Annotated[CommunicationProvider, Depends(get_communication_provider)],
+    _: Annotated[object, Depends(require_capability("reminder:trigger"))],
+) -> OperationResponse:
+    """Re-dispatch a reminder whose delivery failed (P0 §15).
+
+    Not a way to send an extra reminder. It re-attempts a stage that already
+    exists, and it goes through :func:`dispatch_reminder` like the cron does — so
+    it re-reads the authoritative outstanding first and cancels instead of
+    sending if the customer has since paid (REM-2, REM-4). A stage that already
+    succeeded, or has exhausted its bounded attempts, comes back unchanged rather
+    than sending a second message.
+    """
+
+    def perform():
+        reminder = load_reminder_for_tenant(session, ctx, reminder_id)
+        updated = dispatch_reminder(
+            session,
+            ctx,
+            reminder,
+            provider,
+            operation_id=body.operation_id,
+            manual=True,
+        )
+        return serialize_reminder(updated), "reminder", updated.id
+
+    outcome = execute_idempotent(
+        session,
+        ctx,
+        operation_id=body.operation_id,
+        op_type="reminder.send",
+        payload={"reminder_id": str(reminder_id)},
+        perform=perform,
+    )
+    return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+# --- internal jobs (P0 §12) --------------------------------------------------
+
+
+@internal_job_router.post("/run-daily")
+def run_daily_job_route(
+    session: Db,
+    clock: Annotated[Clock, Depends(get_clock)],
+    provider: Annotated[CommunicationProvider, Depends(get_communication_provider)],
+    _: Annotated[None, Depends(require_job_secret)],
+) -> dict:
+    """The host's cron entrypoint. One call, every active tenant, once a day.
+
+    **It takes no tenant and no date.** The runner reads the active tenants
+    itself and resolves each one's business date from its own timezone, so the
+    shared secret grants the ability to *run the job*, never the ability to
+    reach a chosen tenant's data — there is nowhere to name one.
+
+    Safe to call twice: ``job_run`` makes a same-business-date repeat a no-op,
+    and the reminder stage index makes a genuine overlap harmless anyway.
+    """
+    return run_daily(session, clock, provider)
 
 
 # --- sync (P0 §7.3, §7.4) ----------------------------------------------------

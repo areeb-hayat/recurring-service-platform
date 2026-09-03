@@ -37,6 +37,7 @@ __all__ = [
     "CostScenarioRequest",
     "CreateCommissionPlanRequest",
     "RecordCommissionSettlementRequest",
+    "SendReminderRequest",
     "SyncOperationEnvelope",
     "SyncOperationsRequest",
     "OperationResponse",
@@ -311,6 +312,22 @@ class RecordCommissionSettlementRequest(_Base):
 
 
 # --- sync (P0 §7.2, §7.3) ----------------------------------------------------
+
+
+class SendReminderRequest(_Base):
+    """Re-dispatch one reminder by hand (P0 §15 ``POST /reminders/{id}/send``).
+
+    Carries an ``operation_id`` like every other mutation, so a lost response is
+    replayed rather than re-sent. A *deliberate* second attempt is a new
+    operation, with a new id — which is the honest distinction between "did my
+    click land?" and "send it again".
+
+    Nothing else: the caller does not choose the amount, the stage, the channel
+    or the recipient. Those are the server's, and letting a client name any of
+    them would be exactly the authority REM-7 keeps out of the delivery layer.
+    """
+
+    operation_id: uuid.UUID
 
 
 class SyncOperationEnvelope(_Base):

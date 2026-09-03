@@ -360,3 +360,98 @@ export interface ApiErrorBody {
     [extra: string]: unknown;
   };
 }
+
+// --- reminders (P7) ----------------------------------------------------------
+//
+// Read-only shapes. The client renders these and filters on `status`; it never
+// derives a stage, an eligibility or an amount of its own — those are the
+// server's, computed from the tenant's schedule and the ledger.
+
+export type ReminderKind = "STATEMENT" | "REMINDER" | "FINAL" | "OWNER_ALERT";
+export type ReminderState = "PENDING" | "SENT" | "FAILED" | "CANCELLED";
+
+/** The owner's five buckets, derived server-side. */
+export type ReminderStatus =
+  | "DUE"
+  | "WAITING"
+  | "ATTENTION"
+  | "SETTLED"
+  | "NO_STATEMENT";
+
+export interface ReminderStage {
+  day: number;
+  kind: ReminderKind;
+}
+
+export interface Reminder {
+  id: string;
+  customer_id: string;
+  cycle_id: string;
+  schedule_day: number;
+  kind: ReminderKind;
+  state: ReminderState;
+  /** The balance when the stage was generated — NOT what was delivered. */
+  amount_minor_at_generation: number;
+  attempt_count: number;
+  last_error: string | null;
+  generated_at: string | null;
+  sent_at: string | null;
+  cancelled_at: string | null;
+}
+
+export interface ReminderCycleRef {
+  cycle_id: string;
+  statement_id: string;
+  period_start: string;
+  period_end: string;
+  statement_closing_balance_minor: number;
+}
+
+export interface ReminderRow {
+  customer_id: string;
+  code: string;
+  name: string;
+  area: string | null;
+  customer_status: CustomerStatus;
+  /** Live and authoritative, from the ledger — never a stored reminder amount. */
+  outstanding_minor: number;
+  status: ReminderStatus;
+  has_contact: boolean;
+  cycle: ReminderCycleRef | null;
+  latest: Reminder | null;
+  next_stage: ReminderStage | null;
+  owner_alert: Reminder | null;
+  history: Reminder[];
+}
+
+export interface ReminderOverview {
+  business_date: string;
+  currency: string;
+  currency_exponent: number;
+  /** The tenant's configured schedule. The client shows it; it does not know it. */
+  schedule: ReminderStage[];
+  due_stage: ReminderStage | null;
+  counts: { total: number; due: number; attention: number; settled: number };
+  items: ReminderRow[];
+}
+
+export interface ReminderAttempt {
+  id: string;
+  channel: "WHATSAPP" | "SMS" | "EMAIL";
+  provider: string;
+  template_key: string;
+  state: "QUEUED" | "ACCEPTED" | "DELIVERED" | "FAILED";
+  error: string | null;
+  attempt_no: number;
+  /** The already-rendered values handed to the provider (REM-7). */
+  payload: Record<string, string> | null;
+  created_at: string | null;
+}
+
+export interface ReminderDetail extends Reminder {
+  is_outstanding_reminder: boolean;
+  outstanding_minor: number;
+  currency: string;
+  currency_exponent: number;
+  attempts: ReminderAttempt[];
+}

@@ -25,8 +25,10 @@ DOMAIN_PACKAGES = {
     "payments",
     "commission",
     "costs",
+    "reminders",
     "audit",
     "sync",
+    "ports",
     "core",
 }
 # Tables that must never be updated or deleted (FIN-8, FIN-12, AUD-7).
@@ -130,9 +132,27 @@ class TestASLOT6VendorBoundary:
                     violations.append((module, vendor))
         assert violations == [], f"vendor identifiers in domain code: {violations}"
 
-    def test_no_adapter_package_exists_yet(self):
-        """No adapter is implemented yet; speculative adapter code is scope creep."""
-        assert not (APP_ROOT / "adapters").exists()
+    def test_only_the_comms_adapter_package_exists(self):
+        """P7 adds ``adapters/comms``. ``speech/`` and ``ai/`` are still scope creep.
+
+        The mock communication provider is the *only* adapter that exists, and it
+        makes no network call — ``test_no_http_client_is_imported`` still holds.
+        A speech or AI adapter here would be P9/P8 code written early.
+        """
+        adapters = APP_ROOT / "adapters"
+        assert adapters.exists(), "P7 implements the communication adapter"
+        packages = sorted(
+            d.name
+            for d in adapters.iterdir()
+            if d.is_dir() and not d.name.startswith("__")
+        )
+        assert packages == ["comms"]
+
+    def test_no_real_communication_transport_is_implemented(self):
+        """P7 records what to send and delivers through the mock. P10 sends."""
+        comms = APP_ROOT / "adapters" / "comms"
+        modules = sorted(f.stem for f in comms.glob("*.py"))
+        assert modules == ["__init__", "mock"]
 
 
 class TestNoFutureScope:
@@ -150,7 +170,8 @@ class TestNoFutureScope:
         "SpeechToTextProvider",
         "OperationalIntentInterpreter",
         "SearchInterpreter",
-        "CommunicationProvider",
+        # ``CommunicationProvider`` left this list in P7, which declares it. The
+        # symbols still here belong to P8/P9 or to scope removed for good.
         "payment_attempt",
         # P3 builds the commission family, so CommissionPlan and CommissionEvent
         # left this list. What replaced them is the scope P3 must *not* create:
@@ -329,6 +350,9 @@ class TestTenantScopingIsStructural:
         "app/costs/commands.py",
         "app/costs/estimates.py",
         "app/costs/reporting.py",
+        "app/reminders/engine.py",
+        "app/reminders/reporting.py",
+        "app/reminders/runner.py",
         "app/sync/changes.py",
         "app/sync/operations.py",
     ]
@@ -354,7 +378,15 @@ class TestTenantScopingIsStructural:
                 "serialize_rate",
                 "serialize_usage",
                 "serialize_actual",
+                "serialize_reminder",
+                "serialize_reminders",
                 "commission_minor_for",
+                # The one deliberate exception, and the reason it is safe: this
+                # function iterates the *active tenants the server found* and
+                # builds a SystemContext per tenant inside the loop. Requiring a
+                # ctx argument would mean a caller choosing a tenant, which is
+                # precisely the escape the cron endpoint must not have.
+                "run_reminders_for_all_tenants",
             }:
                 continue
             args = [a.arg for a in node.args.args] + [

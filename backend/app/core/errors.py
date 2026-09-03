@@ -144,3 +144,15 @@ class IdempotencyKeyReuseError(ConflictError):
     """
 
     code = "IDEMPOTENCY_KEY_REUSE"
+
+
+class JobEndpointDisabledError(DomainError):
+    """The scheduled job endpoint has no configured secret, so it is switched off.
+
+    503 rather than 401: this is not a caller who guessed wrong, it is a
+    deployment that has not been finished. Saying so plainly is what stops
+    somebody "fixing" a 401 by removing the check.
+    """
+
+    status_code = 503
+    code = "JOB_ENDPOINT_DISABLED"
