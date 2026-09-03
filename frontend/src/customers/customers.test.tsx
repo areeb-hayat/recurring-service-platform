@@ -26,19 +26,48 @@ describe("the customer list", () => {
     expect(screen.getByText("C-001 · G-10")).toBeInTheDocument();
   });
 
-  it("filters the loaded rows without asking the server again", async () => {
+  it("hands the search box to the server rather than filtering what is loaded", async () => {
+    // P8 changed what this box is. It used to filter the rows already on screen,
+    // which could only ever match the spelling on the books; it now asks
+    // `POST /search/customers`, which also searches the nicknames people
+    // actually use. The list itself is still read from the snapshot.
     signedIn();
-    stubServer({
-      customers: [AYESHA, customer({ id: "x", code: "C-002", name: "Bilal Ahmed" })],
+    const bilal = customer({ id: "x", code: "C-002", name: "Bilal Ahmed" });
+    stubServer({ customers: [AYESHA, bilal] });
+    stub("POST", "/api/v1/search/customers", {
+      body: {
+        items: [
+          {
+            customer_id: bilal.id,
+            code: bilal.code,
+            name: bilal.name,
+            area: bilal.area,
+            phone_e164: bilal.phone_e164,
+            whatsapp_e164: null,
+            status: "ACTIVE",
+            aliases: [],
+            outstanding_minor: 0,
+            matched_on: "NAME",
+            matched_value: bilal.name,
+            match_strength: "STRONG",
+            currency: "PKR",
+            currency_exponent: 2,
+          },
+        ],
+        limit: 20,
+        offset: 0,
+        possibly_truncated: false,
+      },
     });
 
     renderApp(<App />, "/customers");
     await screen.findByText("Ayesha Khan");
 
-    await userEvent.type(screen.getByLabelText("Search this list"), "bilal");
+    await userEvent.type(screen.getByLabelText("Find a customer"), "bilal");
 
-    expect(screen.getByText("Bilal Ahmed")).toBeInTheDocument();
+    expect(await screen.findByText("Bilal Ahmed")).toBeInTheDocument();
     expect(screen.queryByText("Ayesha Khan")).not.toBeInTheDocument();
+    // Still one seed read of the list: search is a separate call, not a refetch.
     expect(requestsTo("GET", "/api/v1/customers")).toHaveLength(1);
   });
 

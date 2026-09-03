@@ -8,6 +8,7 @@ import type { Customer, OperationResult } from "@/api/types";
 import { ErrorNotice, Loading } from "@/components/Feedback";
 import { formatMoney } from "@/lib/money";
 import { usePendingOperation } from "@/daily/usePendingOperation";
+import { CustomerAliases } from "./CustomerAliases";
 import { CustomerFinancials } from "./CustomerFinancials";
 import {
   CustomerForm,
@@ -28,6 +29,11 @@ import {
  * and delivery history, each a server-authoritative list. The balance at the top
  * and the movements underneath come from the same ledger, read twice by the
  * server, never reconciled by the client.
+ *
+ * P7 added the reminder history to that view, and P8 adds the names this
+ * customer is actually called: an owner records "Ahmed bhai" here, and from then
+ * on searching for it finds him. That section is customer identity, so it sits
+ * with the details rather than with the money.
  */
 export function CustomerDetailPage() {
   const { customerId = "" } = useParams();
@@ -162,6 +168,10 @@ export function CustomerDetailPage() {
         />
         <Row label="Payment status" value={humanStatus(customer.payment_status)} />
       </dl>
+
+      {/* P8: the names this customer is actually called. Identity, not money —
+          so it sits above the financial view rather than inside it. */}
+      <CustomerAliases customerId={customer.id} />
 
       {/* The financial view: the server's balance above, and the documents and
           movements behind it. Nothing here re-derives the number. */}

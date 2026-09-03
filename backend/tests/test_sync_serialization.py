@@ -276,17 +276,30 @@ class TestTheRuleIsDiscoverable:
     #: Which module actually allocates a ``row_version`` for each feed entity,
     #: and the op types that reach it. This mapping is the whole contract: it is
     #: what a later package has to extend, and what this file exists to pin.
+    #: Each value is (the modules that allocate the version, the op types that
+    #: reach them). Customer has two writers since P8: an alias write bumps its
+    #: *customer's* row_version, which is what carries a new nickname to every
+    #: device without adding a sync entity.
     ENTITY_WRITERS = {
-        "customer": ("customers/commands.py", {"customer.create", "customer.update"}),
+        "customer": (
+            ("customers/commands.py", "customers/aliases.py"),
+            {
+                "customer.create",
+                "customer.update",
+                "customer.alias.add",
+                "customer.alias.update",
+                "customer.alias.deactivate",
+            },
+        ),
         "daily_service_record": (
-            "service/commands.py",
+            ("service/commands.py",),
             {"service.record", "service.skip", "service.correct", "service.void"},
         ),
         # P6. A payment draws a version on insert and advances it on the
         # RECORDED -> VOIDED transition; a statement draws one at issue, which
         # happens only inside a cycle close.
-        "payment": ("payments/commands.py", {"payment.record", "payment.void"}),
-        "statement": ("billing/statements.py", {"billing.close_cycle"}),
+        "payment": (("payments/commands.py",), {"payment.record", "payment.void"}),
+        "statement": (("billing/statements.py",), {"billing.close_cycle"}),
     }
 
     def test_every_feed_entity_has_a_registered_writing_op_type(self):
@@ -314,9 +327,10 @@ class TestTheRuleIsDiscoverable:
         from tests._source import APP_ROOT
 
         expected: set[str] = set()
-        for relative, ops in self.ENTITY_WRITERS.values():
-            source = (APP_ROOT / relative).read_text(encoding="utf-8")
-            assert "next_row_version(session)" in source, relative
+        for modules, ops in self.ENTITY_WRITERS.values():
+            for relative in modules:
+                source = (APP_ROOT / relative).read_text(encoding="utf-8")
+                assert "next_row_version(session)" in source, relative
             expected |= ops
 
         assert FEED_WRITING_OP_TYPES == expected

@@ -11,8 +11,9 @@ satisfies them.
 
 P0 (architecture freeze), P1 (backend & data foundation), P2 (financial engine), P3
 (commercial tracking / commission), P4 (customer & daily UI), P5 (offline & sync), P6
-(owner financial dashboard & operating costs) and P7 (reminder engine) are complete —
-see `docs/P1_HANDOVER.md` through `docs/P7_HANDOVER.md`. The backend lives in `backend/`
+(owner financial dashboard & operating costs), P7 (reminder engine) and P8 (smart
+search & customer identification) are complete —
+see `docs/P1_HANDOVER.md` through `docs/P8_HANDOVER.md`. The backend lives in `backend/`
 and the frontend in `frontend/`.
 P2 added billing cycles, posting-cycle resolution, immutable statements, manual payments with
 void, the derived payment status and the §11.1 reporting derivations. P3 added the four
@@ -67,6 +68,25 @@ non-string param or any key ending in `_minor`. `MockCommunicationProvider` is t
 implementation and makes no network call. Reminders are **server-only**: no reminder write
 enters the P5 outbox, no reminder table carries `row_version`, and `SYNC_FEED_VERSION` stays
 **2**.
+
+**P8 made the product able to find a person.** `customer_alias` records the names a
+customer is actually called; `app/search/` holds one normalization path, one tenant-scoped
+ranked query (`POST /search/customers`) and one channel-independent resolver
+(`POST /search/customers/resolve`). Aliases travel inside the customer payload rather than
+as a sync entity — an alias write bumps the *customer's* `row_version` — and
+`SYNC_FEED_VERSION` is now **3** so devices re-seed rows written before `aliases` existed.
+Alias writes are online-only, exactly as customer create and edit are; offline CONFIRM and
+SKIP are unchanged.
+
+**Customer identity is never guessed.** `resolve_customer` answers RESOLVED (one
+authoritative id), AMBIGUOUS (candidates for a person to choose between) or NOT_FOUND, and
+nothing weak — a prefix, a substring, an area or a fuzzy match — ever resolves, however far
+ahead it ranks. Two customers matching equally is a question, never a coin toss dressed up
+as a ranking. That resolver is the contract P9 voice and P10 text channels reuse: there is
+deliberately no per-channel matching code for them to grow. Matching is PostgreSQL and
+application logic only (`pg_trgm` for indexes and typo-tolerant *candidates*) — no
+Elasticsearch, no vector database, no external search service — and no model generates,
+suggests or interprets anything.
 
 Do not skip ahead: no AI and no voice before their package, and **no real messaging transport
 before P10** — no n8n, Evolution, WhatsApp, Meta Cloud API, SMS gateway, GSM modem or Android
@@ -223,6 +243,7 @@ authoritative and always available whatever happens to voice.
 app/core       money, ids, time, config, security primitives
 app/<domain>   tenancy identity customers service billing payments
                commission costs reminders sync search voice
+               (app/search: normalize + filters + query + resolver)
 app/ports      CommunicationProvider (P7), SpeechToTextProvider,
                SearchInterpreter, OperationalIntentInterpreter (Protocols)
 app/adapters   comms/ (mock only) — speech/ and ai/ belong to P9 and P8
@@ -241,6 +262,7 @@ frontend/src/statements issued statements: list and detail
 frontend/src/payments   manual payment recording (online only)
 frontend/src/costs      operating costs: rates, usage, invoices, scenarios
 frontend/src/reminders  where each customer stands in the schedule (online only)
+frontend/src/search     the search box, candidate rows, and the offline mirror
 frontend/src/lib        exact quantity arithmetic, money display/parsing, uuidv7
 frontend/src/sync       IndexedDB stores, the sync engine, sync status, Needs Attention
 frontend/e2e            Playwright acceptance suite and its fixture server

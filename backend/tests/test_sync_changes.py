@@ -129,10 +129,16 @@ class TestShape:
         different `feed_version` is the client's instruction to discard its
         cursor and resynchronise from zero, which is the only way those older
         rows can arrive.
+
+        P8 raised it again for the other reason a bump exists: no entity joined,
+        but every customer row gained an `aliases` field, and rows already on a
+        device would otherwise keep the old shape until something unrelated
+        changed them. Either way the guarantee is the same — the version is
+        strictly above P5's 1, and the feed reports whatever it is.
         """
         from app.sync.changes import SYNC_FEED_VERSION
 
-        assert SYNC_FEED_VERSION == 2, "P6 raised it from P5's 1"
+        assert SYNC_FEED_VERSION > 1, "P6 raised it from P5's 1; P8 raised it again"
         assert feed(client, tenant_a)["feed_version"] == SYNC_FEED_VERSION
 
 

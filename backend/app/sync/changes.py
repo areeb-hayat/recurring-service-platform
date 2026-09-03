@@ -39,9 +39,19 @@ screen at all.
 ``SYNC_FEED_VERSION`` is what makes admitting an entity safe: a client whose
 stored feed version differs discards its cursor and resynchronises from zero,
 which is the only way a newly added entity's *older* rows can reach a device
-already past them. It is bumped to 2 by this change. That resync clears the
-snapshot only — the outbox and the issues store are not caches and are never
+already past them. P6 bumped it to 2; **P8 bumps it to 3**. That resync clears
+the snapshot only — the outbox and the issues store are not caches and are never
 touched.
+
+**P8 adds no entity, and still needs the bump.** Customer aliases travel inside
+the customer payload rather than as a sync entity of their own, so
+``SYNC_ENTITIES`` is unchanged. But a device that synchronised before P8 holds
+customer rows serialized without an ``aliases`` field, and those rows will not
+be sent again until something else changes the customer — so offline search
+would silently fail to find a nickname the server knows perfectly well. The
+version bump is what re-seeds them. It is also why an alias write bumps its
+*customer's* ``row_version`` (``app/customers/aliases.py``): from then on, an
+ordinary feed page carries the change.
 
 Commission never appears here at any version. Those tables carry no
 ``row_version`` at all (P0 §6, COM-8), so there is no mechanism by which a tenant
@@ -57,7 +67,7 @@ from sqlalchemy.orm import Session
 
 from app.billing.models import Statement
 from app.billing.statements import serialize_statement
-from app.customers.commands import serialize_customer
+from app.customers.commands import serialize_customers
 from app.customers.models import Customer
 from app.payments.commands import serialize_payment
 from app.payments.models import Payment
@@ -76,11 +86,13 @@ __all__ = [
     "changes_since",
 ]
 
-# Bump whenever SYNC_ENTITIES changes. Clients treat a different value as
+# Bump whenever SYNC_ENTITIES changes, **or when the serialized shape of an
+# entity gains a field a client depends on**. Clients treat a different value as
 # "resynchronise from zero". P6 raised it from 1 to 2 when ``payment`` and
-# ``statement`` joined: without the bump, a device already past those rows'
-# versions would never receive them.
-SYNC_FEED_VERSION = 2
+# ``statement`` joined; P8 raises it to 3 because every customer row now carries
+# ``aliases``, and rows already on a device would otherwise keep the old shape
+# until something unrelated changed them.
+SYNC_FEED_VERSION = 3
 
 SYNC_ENTITIES: tuple[str, ...] = (
     "tenant",
@@ -118,7 +130,11 @@ def _customer_rows(
         .scalars()
         .all()
     )
-    return [(r.row_version, str(r.id), serialize_customer(r, ctx)) for r in rows]
+    # Aliases for the whole page in one further statement, never one per row.
+    return [
+        (row.row_version, str(row.id), payload)
+        for row, payload in zip(rows, serialize_customers(session, ctx, rows))
+    ]
 
 
 def _service_record_rows(

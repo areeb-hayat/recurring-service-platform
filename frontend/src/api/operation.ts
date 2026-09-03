@@ -43,7 +43,14 @@ export type OpType =
   // Online-only (P7 §19). Reminder generation and delivery are server-only, so
   // this never enters the outbox — it is a manual re-dispatch of a stage the
   // server already created, not a write a device may queue.
-  | "reminder.send";
+  | "reminder.send"
+  // Online-only (P8 §13). An alias write bumps its customer's `row_version`, so
+  // the change reaches every device through the ordinary customer feed — but the
+  // write itself is never queued: aliases are customer data, and customer edits
+  // have always been online-only. The offline guarantee stays CONFIRM and SKIP.
+  | "customer.alias.add"
+  | "customer.alias.update"
+  | "customer.alias.deactivate";
 
 export interface OperationEnvelope<P> {
   operation_id: string;

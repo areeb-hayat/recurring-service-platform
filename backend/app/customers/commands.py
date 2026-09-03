@@ -6,7 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -17,7 +17,9 @@ from app.audit.service import record_tenant_event, snapshot
 from app.core.db import next_row_version
 from app.core.errors import ConflictError, NotFoundError, ValidationFailed
 from app.core.money import QuantityError, MoneyError, quantize_quantity, validate_unit_price_minor
+from app.customers.aliases import alias_map_for, list_aliases
 from app.customers.models import Customer
+from app.search.normalize import normalize_text
 from app.tenancy.context import TenantContext
 
 __all__ = [
@@ -28,6 +30,7 @@ __all__ = [
     "get_customer",
     "list_customers",
     "serialize_customer",
+    "serialize_customers",
 ]
 
 _E164 = re.compile(r"^\+[1-9]\d{6,14}$")
@@ -84,11 +87,27 @@ def _validate_money_and_quantity(quantity_value: Any, price_value: Any) -> tuple
     return quantity, price
 
 
-def serialize_customer(customer: Customer, ctx: TenantContext) -> dict[str, Any]:
+def serialize_customer(
+    customer: Customer,
+    ctx: TenantContext,
+    *,
+    aliases: Sequence[str] = (),
+) -> dict[str, Any]:
+    """The customer as every reader sees them, aliases included.
+
+    ``aliases`` is passed in rather than looked up here, because this function is
+    called once per row by the list route and by the change feed: a query inside
+    it would be an N+1 over the whole customer population. :func:`serialize_customers`
+    is the batching wrapper, and it is what those callers use.
+    """
     return {
         "id": str(customer.id),
         "code": customer.code,
         "name": customer.name,
+        # P8. The names this customer is actually called. Part of the customer
+        # payload rather than a sync entity of its own, so an offline device can
+        # find "Ahmed bhai" with nothing new in the feed but a version bump.
+        "aliases": list(aliases),
         "phone_e164": customer.phone_e164,
         "whatsapp_e164": customer.whatsapp_e164,
         "address": customer.address,
@@ -101,6 +120,16 @@ def serialize_customer(customer: Customer, ctx: TenantContext) -> dict[str, Any]
         "currency": ctx.currency,
         "currency_exponent": ctx.currency_exponent,
     }
+
+
+def serialize_customers(
+    session: Session, ctx: TenantContext, customers: Sequence[Customer]
+) -> list[dict[str, Any]]:
+    """Serialize a batch, loading every alias in one further statement."""
+    aliases = alias_map_for(session, ctx, [c.id for c in customers])
+    return [
+        serialize_customer(c, ctx, aliases=aliases.get(c.id, ())) for c in customers
+    ]
 
 
 def get_customer(session: Session, ctx: TenantContext, customer_id: uuid.UUID) -> Customer:
@@ -158,6 +187,7 @@ def create_customer(
         tenant_id=ctx.tenant_id,
         code=data.code.strip(),
         name=data.name.strip(),
+        normalized_name=normalize_text(data.name),
         phone_e164=_validate_phone(data.phone_e164, "phone_e164"),
         whatsapp_e164=_validate_phone(data.whatsapp_e164, "whatsapp_e164"),
         address=data.address,
@@ -189,6 +219,8 @@ def create_customer(
         operation_id=operation_id,
     )
     session.flush()
+    # A customer that has just been created has no aliases, so this is the one
+    # serialization that needs no lookup to say so.
     return serialize_customer(customer, ctx), "customer", customer.id
 
 
@@ -219,6 +251,10 @@ def update_customer(
         if not str(data.name).strip():
             raise ValidationFailed("name is required", field_errors={"name": "required"})
         customer.name = str(data.name).strip()
+        # The comparison key is never allowed to drift from the name it
+        # describes: a rename that left it behind would make the customer
+        # findable only under the name they no longer have.
+        customer.normalized_name = normalize_text(customer.name)
     if data.phone_e164 is not _UNSET:
         customer.phone_e164 = _validate_phone(data.phone_e164, "phone_e164")
     if data.whatsapp_e164 is not _UNSET:
@@ -257,4 +293,9 @@ def update_customer(
         operation_id=operation_id,
     )
     session.flush()
-    return serialize_customer(customer, ctx), "customer", customer.id
+    aliases = [a.alias for a in list_aliases(session, ctx, customer.id)]
+    return (
+        serialize_customer(customer, ctx, aliases=aliases),
+        "customer",
+        customer.id,
+    )

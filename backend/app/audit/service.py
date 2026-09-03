@@ -40,6 +40,15 @@ AUDITABLE_FIELDS: dict[str, tuple[str, ...]] = {
         "unit_price_minor",
         "status",
         "row_version",
+        # P8: the comparison key travels with the name it belongs to, so an audit
+        # reader can see that a rename kept the two in step.
+        "normalized_name",
+    ),
+    "customer_alias": (
+        "customer_id",
+        "alias",
+        "normalized",
+        "status",
     ),
     "daily_service_record": (
         "customer_id",

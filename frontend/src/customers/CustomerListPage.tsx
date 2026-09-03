@@ -1,37 +1,54 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
-import { EmptyState, Loading } from "@/components/Feedback";
+import { EmptyState, ErrorNotice, Loading } from "@/components/Feedback";
+import { messageFor } from "@/api/errors";
+import {
+  CandidateList,
+  CustomerSearchBox,
+  SearchSourceNote,
+} from "@/search/CustomerSearch";
+import { useCustomerSearch } from "@/search/useCustomerSearch";
 import { useLocalData } from "@/sync/useLocalData";
 
 /**
- * Everyone on the books.
+ * Everyone on the books, and a way to find one of them.
  *
- * The search box filters the rows already loaded. It is a display filter, not a
- * query: the backend has no customer name search in V1 (P0 §12.1 puts that behind
- * the search package), and P0 §7.1 says local search runs against `snapshot`
- * only. Filtering is only honest because the snapshot holds *every* customer —
- * the sync engine seeds it by walking `GET /customers` to the end and then keeps
- * it current from the change feed — so the filter is over everyone, not over a
- * first page.
+ * **P8 changed what the search box is.** It used to filter the rows already
+ * loaded — a display filter that could only ever match a name, a code or an
+ * area, and only in the spelling on the books. It is now the real thing: online
+ * it asks `POST /search/customers`, which searches names, *the nicknames people
+ * actually use*, codes, phone numbers and areas with the server's own
+ * normalization and ranking; offline it searches this device's synchronised copy
+ * with the mirrored rules. The screen always says which of the two answered.
+ *
+ * With the box empty this is still the plain list, read from the snapshot so it
+ * works with no network at all. Nothing here ranks, scores or decides — the
+ * order of a search result is the server's, and a weak match is labelled rather
+ * than promoted.
  */
 export function CustomerListPage() {
   const [term, setTerm] = useState("");
+  const navigate = useNavigate();
   const { customers, loading, unavailable } = useLocalData();
 
-  const rows = useMemo(() => {
-    const items = [...customers].sort(
-      (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
-    );
-    const needle = term.trim().toLowerCase();
-    if (!needle) return items;
-    return items.filter(
-      (c) =>
-        c.name.toLowerCase().includes(needle) ||
-        c.code.toLowerCase().includes(needle) ||
-        (c.area ?? "").toLowerCase().includes(needle),
-    );
-  }, [customers, term]);
+  const search = useCustomerSearch(term, {
+    customers,
+    limit: 50,
+    // The list is where somebody who has left the round is looked up, so
+    // inactive customers belong in these results. The Daily Register's own
+    // search deliberately does the opposite.
+    includeInactive: true,
+  });
+  const searching = term.trim().length > 0;
+
+  const rows = useMemo(
+    () =>
+      [...customers].sort(
+        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+      ),
+    [customers],
+  );
 
   return (
     <div className="stack">
@@ -42,48 +59,59 @@ export function CustomerListPage() {
         </Link>
       </header>
 
-      <label className="field">
-        <span>Search this list</span>
-        <input
-          type="search"
-          value={term}
-          placeholder="Name, code or area"
-          onChange={(e) => setTerm(e.target.value)}
-        />
-      </label>
+      <CustomerSearchBox value={term} onChange={setTerm} label="Find a customer" />
 
-      {loading ? <Loading label="Loading customers…" /> : null}
-      {unavailable ? (
-        <p className="notice notice-error" role="alert">
-          Unavailable offline. This device has not synchronised yet — connect once
-          and the customer list will be available without a network.
-        </p>
-      ) : null}
+      {searching ? (
+        <>
+          <SearchSourceNote
+            source={search.source}
+            possiblyTruncated={search.possiblyTruncated}
+            fellBack={search.fellBack}
+          />
+          {search.error ? <ErrorNotice message={messageFor(search.error)} /> : null}
+          {search.searching && search.results.length === 0 ? (
+            <Loading label="Searching…" />
+          ) : null}
+          <CandidateList
+            candidates={search.results}
+            onPick={(id) => navigate(`/customers/${id}`)}
+            emptyLabel={search.searching ? undefined : "Nobody matches that."}
+          />
+        </>
+      ) : (
+        <>
+          {loading ? <Loading label="Loading customers…" /> : null}
+          {unavailable ? (
+            <p className="notice notice-error" role="alert">
+              Unavailable offline. This device has not synchronised yet — connect once
+              and the customer list will be available without a network.
+            </p>
+          ) : null}
 
-      {!loading && !unavailable && rows.length === 0 ? (
-        <EmptyState>
-          {term ? "Nobody here matches that." : "No customers yet. Add the first one."}
-        </EmptyState>
-      ) : null}
+          {!loading && !unavailable && rows.length === 0 ? (
+            <EmptyState>No customers yet. Add the first one.</EmptyState>
+          ) : null}
 
-      <ul className="list">
-        {rows.map((customer) => (
-          <li key={customer.id}>
-            <Link className="row" to={`/customers/${customer.id}`}>
-              <span className="row-main">
-                {customer.name}
-                {customer.status === "INACTIVE" ? (
-                  <span className="badge">Inactive</span>
-                ) : null}
-              </span>
-              <span className="row-meta">
-                {customer.code}
-                {customer.area ? ` · ${customer.area}` : ""}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
+          <ul className="list">
+            {rows.map((customer) => (
+              <li key={customer.id}>
+                <Link className="row" to={`/customers/${customer.id}`}>
+                  <span className="row-main">
+                    {customer.name}
+                    {customer.status === "INACTIVE" ? (
+                      <span className="badge">Inactive</span>
+                    ) : null}
+                  </span>
+                  <span className="row-meta">
+                    {customer.code}
+                    {customer.area ? ` · ${customer.area}` : ""}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

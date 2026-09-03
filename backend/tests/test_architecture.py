@@ -26,6 +26,7 @@ DOMAIN_PACKAGES = {
     "commission",
     "costs",
     "reminders",
+    "search",
     "audit",
     "sync",
     "ports",
@@ -353,6 +354,9 @@ class TestTenantScopingIsStructural:
         "app/reminders/engine.py",
         "app/reminders/reporting.py",
         "app/reminders/runner.py",
+        "app/customers/aliases.py",
+        "app/search/query.py",
+        "app/search/resolver.py",
         "app/sync/changes.py",
         "app/sync/operations.py",
     ]
@@ -380,6 +384,9 @@ class TestTenantScopingIsStructural:
                 "serialize_actual",
                 "serialize_reminder",
                 "serialize_reminders",
+                "serialize_alias",
+                "serialize_match",
+                "serialize_resolution",
                 "commission_minor_for",
                 # The one deliberate exception, and the reason it is safe: this
                 # function iterates the *active tenants the server found* and
@@ -387,6 +394,11 @@ class TestTenantScopingIsStructural:
                 # ctx argument would mean a caller choosing a tenant, which is
                 # precisely the escape the cron endpoint must not have.
                 "run_reminders_for_all_tenants",
+                # P8, and safe for the opposite reason to the one above: it
+                # queries no business table at all. It asks `pg_extension`
+                # whether pg_trgm is installed — a deployment fact, identical for
+                # every tenant — so there is nothing for a context to scope.
+                "trigram_available",
             }:
                 continue
             args = [a.arg for a in node.args.args] + [

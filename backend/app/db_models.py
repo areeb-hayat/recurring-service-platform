@@ -19,6 +19,7 @@ __all__ = [
     "P3_TABLES",
     "P6_TABLES",
     "P7_TABLES",
+    "P8_TABLES",
     "ALL_TABLES",
 ]
 
@@ -71,7 +72,16 @@ P6_TABLES = frozenset(
 # entity and no reminder write ever enters the P5 outbox.
 P7_TABLES = frozenset({"reminder", "communication_log", "job_run"})
 
-ALL_TABLES = P1_TABLES | P2_TABLES | P3_TABLES | P6_TABLES | P7_TABLES
+# The exact set P8 adds. ``customer_alias`` is the one table beyond P0 §6's
+# inventory, and it is a deliberate addition rather than a deferred one: P0 §8.3
+# requires deterministic server-side customer resolution and P0 §12.3 forbids
+# sending the customer list to a model, which together mean the names a customer
+# is actually called have to live in the database. It carries no ``row_version``
+# — an alias is not a sync entity of its own, it travels inside the customer's
+# payload and bumps the *customer's* version (see ``app/customers/aliases.py``).
+P8_TABLES = frozenset({"customer_alias"})
+
+ALL_TABLES = P1_TABLES | P2_TABLES | P3_TABLES | P6_TABLES | P7_TABLES | P8_TABLES
 
 
 def import_all_models() -> None:

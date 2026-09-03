@@ -75,6 +75,7 @@ export function customer(overrides: Partial<Customer> = {}): Customer {
     id: "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa",
     code: "C-001",
     name: "Ayesha Khan",
+    aliases: [],
     phone_e164: "+923001234567",
     whatsapp_e164: null,
     address: null,
@@ -217,7 +218,7 @@ export function changesResponse(overrides: Record<string, unknown> = {}) {
     cursor: 0,
     has_more: false,
     head: 0,
-    feed_version: 2,
+    feed_version: 3,
     entities: [
       "tenant",
       "customer",

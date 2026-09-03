@@ -55,6 +55,17 @@ export interface Customer {
   id: string;
   code: string;
   name: string;
+  /**
+   * P8. The names this customer is actually called — "Ahmed bhai", "Chacha
+   * Ahmed" — exactly as the owner typed them.
+   *
+   * Part of the customer payload rather than a sync entity of its own, so an
+   * offline device can find a nickname with nothing new in the feed. Optional
+   * on the type because a snapshot row written before the feed bump may not
+   * carry it; every reader treats a missing value as "none known here", never
+   * as "none exist".
+   */
+  aliases?: string[];
   phone_e164: string | null;
   whatsapp_e164: string | null;
   address: string | null;
@@ -454,4 +465,76 @@ export interface ReminderDetail extends Reminder {
   currency: string;
   currency_exponent: number;
   attempts: ReminderAttempt[];
+}
+
+
+// --- search and identification (P8) ------------------------------------------
+//
+// Two questions, one body of server-side rules: *who matches this* and *which
+// customer is this*. The client asks; it never decides. There is no matching,
+// ranking or tie-breaking logic on this side of the wire for the online path —
+// only the offline mirror in `src/search/local.ts`, which says so plainly.
+
+/** `serialize_alias` — one name a customer is called by. */
+export interface CustomerAlias {
+  id: string;
+  customer_id: string;
+  alias: string;
+  status: "ACTIVE" | "INACTIVE";
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** How the query picked this customer out. Displayed, never recomputed. */
+export type MatchKind = "CODE" | "PHONE" | "NAME" | "ALIAS" | "AREA" | "FUZZY" | "NONE";
+
+/**
+ * `serialize_match` — one customer, with the reason they matched.
+ *
+ * `match_strength` is the server's own line between "this is who they meant"
+ * (STRONG) and "this might be" (WEAK). The client renders the distinction; it
+ * does not derive it, and a WEAK match is never actioned without a person
+ * choosing it.
+ */
+export interface CustomerMatch {
+  customer_id: string;
+  code: string;
+  name: string;
+  area: string | null;
+  phone_e164: string | null;
+  whatsapp_e164: string | null;
+  status: CustomerStatus;
+  aliases: string[];
+  /** Server-derived (FIN-4). Displayed as given. */
+  outstanding_minor: number;
+  matched_on: MatchKind;
+  matched_value: string | null;
+  match_strength: "STRONG" | "WEAK";
+  currency: string;
+  currency_exponent: number;
+}
+
+export interface CustomerSearchResponse {
+  items: CustomerMatch[];
+  limit: number;
+  offset: number;
+  /** A full page means "there may be more", not "these are all of them". */
+  possibly_truncated: boolean;
+}
+
+/**
+ * The identification contract (`serialize_resolution`).
+ *
+ * RESOLVED carries exactly one authoritative `customer`. AMBIGUOUS carries the
+ * candidates and no customer — the caller must ask a person. NOT_FOUND carries
+ * neither. There is deliberately no fourth value and no confidence number: a
+ * best guess with a score attached is still a guess.
+ */
+export type ResolutionStatus = "RESOLVED" | "AMBIGUOUS" | "NOT_FOUND";
+
+export interface CustomerResolution {
+  status: ResolutionStatus;
+  query: string;
+  customer: CustomerMatch | null;
+  candidates: CustomerMatch[];
 }

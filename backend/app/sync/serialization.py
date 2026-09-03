@@ -77,6 +77,12 @@ FEED_WRITING_OP_TYPES: frozenset[str] = frozenset(
     {
         "customer.create",
         "customer.update",
+        # P8: an alias write bumps its customer's row_version, so it writes an
+        # entity the feed carries and belongs under the same commit-order
+        # boundary as any other customer write.
+        "customer.alias.add",
+        "customer.alias.update",
+        "customer.alias.deactivate",
         "service.record",
         "service.skip",
         "service.correct",

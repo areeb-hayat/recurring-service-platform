@@ -38,6 +38,10 @@ __all__ = [
     "CreateCommissionPlanRequest",
     "RecordCommissionSettlementRequest",
     "SendReminderRequest",
+    "AddAliasRequest",
+    "UpdateAliasRequest",
+    "DeactivateAliasRequest",
+    "ResolveCustomerRequest",
     "SyncOperationEnvelope",
     "SyncOperationsRequest",
     "OperationResponse",
@@ -360,3 +364,46 @@ class OperationResponse(_Base):
 
     status: Literal["APPLIED", "DUPLICATE"]
     entity: dict[str, Any]
+
+
+# --- P8: aliases and customer identification ---------------------------------
+
+
+class AddAliasRequest(_Base):
+    """Another name this customer is called by.
+
+    One field and an ``operation_id``. The caller does not supply the comparison
+    key — that is derived server-side by the single normalization path, because
+    two clients normalizing for themselves is two definitions of "the same name".
+    """
+
+    operation_id: uuid.UUID
+    alias: NonEmptyStr
+
+
+class UpdateAliasRequest(_Base):
+    """Correct the spelling of an existing alias, keeping its identity."""
+
+    operation_id: uuid.UUID
+    alias: NonEmptyStr
+
+
+class DeactivateAliasRequest(_Base):
+    """Retire an alias. The row stays; it stops matching (AUD-1 in spirit)."""
+
+    operation_id: uuid.UUID
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ResolveCustomerRequest(_Base):
+    """Free text in, an identification decision out.
+
+    Deliberately a POST with a body rather than a query string: the reference is
+    a person's name, and names do not belong in URLs, access logs or browser
+    history.
+    """
+
+    reference: str = Field(min_length=1, max_length=120)
+    limit: int = Field(default=5, ge=1, le=10)
+    include_inactive: bool = False
+    allow_fuzzy: bool = True

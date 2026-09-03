@@ -28,6 +28,7 @@ from app.api.deps import (
     require_job_secret,
 )
 from app.api.schemas import (
+    AddAliasRequest,
     CloseCycleRequest,
     CorrectServiceRequest,
     CostScenarioRequest,
@@ -35,6 +36,7 @@ from app.api.schemas import (
     CreateCostItemRequest,
     CreateCostRateRequest,
     CreateCustomerRequest,
+    DeactivateAliasRequest,
     LoginRequest,
     LogoutRequest,
     OperationResponse,
@@ -44,9 +46,11 @@ from app.api.schemas import (
     RecordPaymentRequest,
     RecordServiceRequest,
     RefreshRequest,
+    ResolveCustomerRequest,
     SendReminderRequest,
     SyncOperationsRequest,
     TokenResponse,
+    UpdateAliasRequest,
     UpdateCustomerRequest,
     VoidPaymentRequest,
     VoidServiceRequest,
@@ -91,6 +95,13 @@ from app.costs.commands import (
 )
 from app.costs.estimates import month_start
 from app.costs.reporting import evaluate_scenarios, month_history, month_summary
+from app.customers.aliases import (
+    add_alias,
+    deactivate_alias,
+    list_aliases,
+    serialize_alias,
+    update_alias,
+)
 from app.customers.commands import (
     CreateCustomerInput,
     UpdateCustomerInput,
@@ -98,6 +109,7 @@ from app.customers.commands import (
     get_customer,
     list_customers,
     serialize_customer,
+    serialize_customers,
     update_customer,
 )
 from app.identity import service as auth_service
@@ -112,6 +124,9 @@ from app.payments.commands import (
     void_payment,
 )
 from app.ports.comms import CommunicationProvider
+from app.search.filters import CustomerSearchFilter
+from app.search.query import search_customers, serialize_match
+from app.search.resolver import resolve_customer, serialize_resolution
 from app.reminders.engine import dispatch_reminder, serialize_reminder
 from app.reminders.reporting import (
     load_reminder_for_tenant,
@@ -152,6 +167,10 @@ cost_router = APIRouter(prefix="/api/v1/operating-costs", tags=["operating-costs
 # no way for a caller to choose a stage, an amount or a recipient. Those are the
 # engine's, and the schedule's.
 reminder_router = APIRouter(prefix="/api/v1/reminders", tags=["reminders"])
+# P8. Read-only, tenant-scoped, and gated by the ``search:use`` capability P0
+# §3.2 froze. There is no write on this router and never will be: search finds
+# people, it does not change them.
+search_router = APIRouter(prefix="/api/v1/search", tags=["search"])
 sync_router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 # P0 §12, §15: driven by the host's cron with a shared secret, never by a user
 # token. Deliberately outside every tenant prefix and taking no tenant parameter.
@@ -243,7 +262,8 @@ def list_customers_route(
     rows = list_customers(
         session, ctx, area=area, status=status, limit=limit, offset=offset
     )
-    return {"items": [serialize_customer(c, ctx) for c in rows]}
+    # Batched: one alias statement for the page, never one per customer.
+    return {"items": serialize_customers(session, ctx, rows)}
 
 
 @customer_router.post("", response_model=OperationResponse, status_code=201)
@@ -287,7 +307,11 @@ def get_customer_route(
     _: Annotated[object, Depends(require_capability("customer:read"))],
 ) -> dict:
     customer = get_customer(session, ctx, customer_id)
-    data = serialize_customer(customer, ctx)
+    data = serialize_customer(
+        customer,
+        ctx,
+        aliases=[a.alias for a in list_aliases(session, ctx, customer.id)],
+    )
     # FIN-4 / FIN-11: both derived on read, never stored and never client-computed.
     data["outstanding_minor"] = outstanding_minor(session, ctx, customer.id)
     data["payment_status"] = customer_payment_status(session, ctx, customer.id)
@@ -332,6 +356,184 @@ def update_customer_route(
         ),
     )
     return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+# --- customer aliases (P8) ---------------------------------------------------
+#
+# The names a customer is actually called. Three writes and one read, all under
+# the existing ``customer:read`` / ``customer:write`` capabilities — an alias is
+# customer data, so it needs no capability of its own and the frozen map (P0
+# §3.2) is unchanged.
+#
+# Every write carries an ``operation_id`` and goes through ``execute_idempotent``
+# like any other mutation, and its ``op_type`` is in ``FEED_WRITING_OP_TYPES``
+# because an alias write bumps its customer's ``row_version``. None of them is in
+# ``SUPPORTED_OP_TYPES``: aliases are an online-only edit, exactly as customer
+# create and edit are, so ``POST /sync/operations`` refuses them.
+
+
+@customer_router.get("/{customer_id}/aliases")
+def list_aliases_route(
+    customer_id: uuid.UUID,
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("customer:read"))],
+    include_inactive: bool = False,
+) -> dict:
+    get_customer(session, ctx, customer_id)  # SEC-4: 404 for another tenant's id
+    rows = list_aliases(session, ctx, customer_id, include_inactive=include_inactive)
+    return {"items": [serialize_alias(a) for a in rows]}
+
+
+@customer_router.post("/{customer_id}/aliases", response_model=OperationResponse, status_code=201)
+def add_alias_route(
+    customer_id: uuid.UUID,
+    body: AddAliasRequest,
+    ctx: TenantCtx,
+    session: Db,
+    clock: Annotated[Clock, Depends(get_clock)],
+    _: Annotated[object, Depends(require_capability("customer:write"))],
+) -> OperationResponse:
+    outcome = execute_idempotent(
+        session,
+        ctx,
+        operation_id=body.operation_id,
+        op_type="customer.alias.add",
+        payload={"customer_id": str(customer_id), "alias": body.alias},
+        perform=lambda: add_alias(
+            session,
+            ctx,
+            customer_id,
+            body.alias,
+            operation_id=body.operation_id,
+            clock=clock,
+        ),
+    )
+    return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+@customer_router.patch(
+    "/{customer_id}/aliases/{alias_id}", response_model=OperationResponse
+)
+def update_alias_route(
+    customer_id: uuid.UUID,
+    alias_id: uuid.UUID,
+    body: UpdateAliasRequest,
+    ctx: TenantCtx,
+    session: Db,
+    clock: Annotated[Clock, Depends(get_clock)],
+    _: Annotated[object, Depends(require_capability("customer:write"))],
+) -> OperationResponse:
+    outcome = execute_idempotent(
+        session,
+        ctx,
+        operation_id=body.operation_id,
+        op_type="customer.alias.update",
+        payload={
+            "customer_id": str(customer_id),
+            "alias_id": str(alias_id),
+            "alias": body.alias,
+        },
+        perform=lambda: update_alias(
+            session,
+            ctx,
+            customer_id,
+            alias_id,
+            body.alias,
+            operation_id=body.operation_id,
+            clock=clock,
+        ),
+    )
+    return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+@customer_router.post(
+    "/{customer_id}/aliases/{alias_id}/deactivate", response_model=OperationResponse
+)
+def deactivate_alias_route(
+    customer_id: uuid.UUID,
+    alias_id: uuid.UUID,
+    body: DeactivateAliasRequest,
+    ctx: TenantCtx,
+    session: Db,
+    clock: Annotated[Clock, Depends(get_clock)],
+    _: Annotated[object, Depends(require_capability("customer:write"))],
+) -> OperationResponse:
+    """Retire an alias. There is deliberately no DELETE verb and no delete row."""
+    outcome = execute_idempotent(
+        session,
+        ctx,
+        operation_id=body.operation_id,
+        op_type="customer.alias.deactivate",
+        payload={
+            "customer_id": str(customer_id),
+            "alias_id": str(alias_id),
+            "reason": body.reason,
+        },
+        perform=lambda: deactivate_alias(
+            session,
+            ctx,
+            customer_id,
+            alias_id,
+            reason=body.reason,
+            operation_id=body.operation_id,
+            clock=clock,
+        ),
+    )
+    return OperationResponse(status=outcome.status, entity=outcome.result)
+
+
+# --- search and identification (P8) ------------------------------------------
+
+
+@search_router.post("/customers")
+def search_customers_route(
+    body: CustomerSearchFilter,
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("search:use"))],
+) -> dict:
+    """Structured customer search (P0 §15 ``POST /search/customers``).
+
+    The body **is** the frozen filter object: FastAPI validates it with the same
+    model the domain uses, so an unknown field, an inflated limit or an SQL
+    fragment is refused before a query is built rather than after. The result is
+    bounded by the filter's own cap.
+    """
+    matches = search_customers(session, ctx, body)
+    return {
+        "items": [serialize_match(m, ctx) for m in matches],
+        "limit": body.limit,
+        "offset": body.offset,
+        # Honest about truncation: a full page means "there may be more", which
+        # is not the same as "these are all of them".
+        "possibly_truncated": len(matches) == body.limit,
+    }
+
+
+@search_router.post("/customers/resolve")
+def resolve_customer_route(
+    body: ResolveCustomerRequest,
+    ctx: TenantCtx,
+    session: Db,
+    _: Annotated[object, Depends(require_capability("search:use"))],
+) -> dict:
+    """Identify one customer from free text — RESOLVED, AMBIGUOUS or NOT_FOUND.
+
+    The channel-independent half of P8. What a person typed here, what a
+    transcript says later and what an inbound message says later still all arrive
+    at the same function and get the same answer; there is no second resolution
+    path for any of them to grow into.
+    """
+    resolution = resolve_customer(
+        session,
+        ctx,
+        body.reference,
+        limit=body.limit,
+        include_inactive=body.include_inactive,
+        allow_fuzzy=body.allow_fuzzy,
+    )
+    return serialize_resolution(resolution, ctx)
 
 
 # --- daily service ----------------------------------------------------------

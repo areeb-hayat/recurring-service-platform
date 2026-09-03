@@ -646,19 +646,20 @@ describe("the change feed", () => {
     renderApp(<App />, "/today");
     await screen.findByRole("heading", { name: "Ayesha Khan" });
     const store = await db();
-    // The fixture's version tracks the server's real `SYNC_FEED_VERSION`, which
-    // P6 raised to 2 when `payment` and `statement` joined the feed. The numbers
-    // here are deliberately "whatever it is now" and "one more than that": the
-    // guarantee under test is the *transition*, not the value.
+    // The fixture's version tracks the server's real `SYNC_FEED_VERSION`: P6
+    // raised it to 2 when `payment` and `statement` joined the feed, and P8
+    // raised it to 3 so devices re-seed customer rows that predate `aliases`.
+    // The numbers here are deliberately "whatever it is now" and "one more than
+    // that": the guarantee under test is the *transition*, not the value.
     await waitFor(async () =>
-      expect((await store.get("meta", "feed_version"))?.value).toBe(2),
+      expect((await store.get("meta", "feed_version"))?.value).toBe(3),
     );
 
-    stub("GET", "/api/v1/sync/changes", { body: changesResponse({ feed_version: 3, head: 900 }) });
+    stub("GET", "/api/v1/sync/changes", { body: changesResponse({ feed_version: 4, head: 900 }) });
     await engineFor(TENANT_ID).syncNow();
 
     await waitFor(async () =>
-      expect((await store.get("meta", "feed_version"))?.value).toBe(3),
+      expect((await store.get("meta", "feed_version"))?.value).toBe(4),
     );
     // The queue and the issues store are not caches and are never cleared by this.
     expect(await store.count("outbox")).toBe(0);

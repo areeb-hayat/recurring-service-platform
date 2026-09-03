@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { EmptyState, Loading } from "@/components/Feedback";
 import { useSync } from "@/sync/SyncProvider";
+import { RegisterSearch } from "./RegisterSearch";
 import { ServiceCard } from "./ServiceCard";
 import { useRegister, type RegisterEntry } from "./useRegister";
 
@@ -16,6 +18,11 @@ import { useRegister, type RegisterEntry } from "./useRegister";
  * word "Today". Offline the snapshot may be carrying yesterday's date, and the
  * person deserves to see which day their taps are being filed under before they
  * make thirty of them.
+ *
+ * P8 adds a way to reach one customer without scrolling to them. It only ever
+ * *selects* an existing card: the three states below — still to do, waiting to
+ * sync, done — and the writes behind them are untouched, and there is exactly
+ * one register state machine on this screen.
  */
 export function DailyRegisterPage() {
   const { register, loading, unavailable } = useRegister();
@@ -83,7 +90,13 @@ export function DailyRegisterPage() {
 
       {entries.length === 0 ? (
         <EmptyState>No active customers yet. Add one from Customers.</EmptyState>
-      ) : null}
+      ) : (
+        <RegisterSearch
+          customers={entries.map((entry) => entry.customer)}
+          onPick={setSelectedId}
+          onRound={(id) => entries.some((entry) => entry.customer.id === id)}
+        />
+      )}
 
       {selected ? (
         <ServiceCard
@@ -96,6 +109,15 @@ export function DailyRegisterPage() {
           onLeaveForLater={leaveForLater}
           onQueued={setSelectedId}
         />
+      ) : null}
+
+      {/* P8: once a customer is in front of you, their P6 financial view is one
+          tap away. Online only — that view is a server read, and a balance this
+          device cannot vouch for is worse than no balance (SYN-9). */}
+      {selected && online ? (
+        <Link className="btn btn-quiet" to={`/customers/${selected.customer.id}`}>
+          View {selected.customer.name}&rsquo;s financials
+        </Link>
       ) : null}
 
       {pending.length === 0 && queued.length === 0 && entries.length > 0 && !selected ? (

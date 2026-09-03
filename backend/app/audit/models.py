@@ -28,6 +28,13 @@ __all__ = ["AuditEvent", "AuditAction", "AuditSource", "ActorScope"]
 class AuditAction:
     CUSTOMER_CREATED = "customer.created"
     CUSTOMER_UPDATED = "customer.updated"
+    # P8. Aliases are customer identity, not money, so they are named apart from
+    # everything financial. Every one of them carries the alias text before and
+    # after, which is where the history of a corrected nickname lives.
+    CUSTOMER_ALIAS_ADDED = "customer_alias.added"
+    CUSTOMER_ALIAS_UPDATED = "customer_alias.updated"
+    CUSTOMER_ALIAS_DEACTIVATED = "customer_alias.deactivated"
+    CUSTOMER_ALIAS_REACTIVATED = "customer_alias.reactivated"
     SERVICE_RECORDED = "service.recorded"
     SERVICE_SKIPPED = "service.skipped"
     SERVICE_CORRECTED = "service.corrected"

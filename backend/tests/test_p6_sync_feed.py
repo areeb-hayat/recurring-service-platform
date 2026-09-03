@@ -170,10 +170,19 @@ class TestStatementInTheFeed:
 
 
 class TestFeedVersionAndScope:
-    def test_the_feed_version_is_two_and_names_the_new_entities(self, db, tenant_a):
+    def test_the_feed_version_moved_and_the_feed_names_the_new_entities(
+        self, db, tenant_a
+    ):
+        """P6 raised the version to 2 when `payment` and `statement` joined.
+
+        The number itself is not P6's to own — P8 raised it again, without
+        adding an entity, so that devices re-seed customer rows written before
+        those rows carried aliases. What P6 pins here is that the version *moved*
+        past P5's 1 and that the feed carries exactly these five entities.
+        """
         body = changes_since(db, tenant_a.ctx, since=0)
-        assert SYNC_FEED_VERSION == 2
-        assert body["feed_version"] == 2
+        assert SYNC_FEED_VERSION >= 2
+        assert body["feed_version"] == SYNC_FEED_VERSION
         assert set(body["entities"]) == {
             "tenant",
             "customer",

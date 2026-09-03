@@ -791,6 +791,14 @@ class TestRouteInventory:
         ("GET", "/api/v1/reminders"),
         ("GET", "/api/v1/reminders/{reminder_id}"),
         ("POST", "/api/v1/reminders/{reminder_id}/send"),
+        # P8. Search is the one surface whose whole job is to *find people by
+        # name*, which is precisely what must never reach across a tenant.
+        ("POST", "/api/v1/search/customers"),
+        ("POST", "/api/v1/search/customers/resolve"),
+        ("GET", "/api/v1/customers/{customer_id}/aliases"),
+        ("POST", "/api/v1/customers/{customer_id}/aliases"),
+        ("PATCH", "/api/v1/customers/{customer_id}/aliases/{alias_id}"),
+        ("POST", "/api/v1/customers/{customer_id}/aliases/{alias_id}/deactivate"),
     }
 
     PLATFORM_EXERCISED = {
@@ -883,6 +891,120 @@ class TestP7ReminderIsolation:
             resp = client.request(
                 method, path, json={"operation_id": str(uuid7())}, headers=headers
             )
+            assert resp.status_code == 403, f"{method} {path} -> {resp.status_code}"
+            assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
+
+
+class TestP8SearchIsolation:
+    """SEC-3/4/6 over the surface that exists to find people by name.
+
+    Search is the sharpest tenancy risk in the product so far: every other
+    endpoint is addressed by an id somebody already holds, while this one takes a
+    *name* and goes looking. If it ever crossed a tenant, the leak would not be an
+    id — it would be another business's customer list, one query at a time.
+    """
+
+    @pytest.fixture
+    def a_alias(self, client, tenant_a, a_customer):
+        resp = client.post(
+            f"/api/v1/customers/{a_customer['id']}/aliases",
+            json={"operation_id": str(uuid7()), "alias": "Tenant A Nickname"},
+            headers=tenant_a.auth,
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["entity"]
+
+    def test_SEC3_search_holds_only_the_callers_tenant(
+        self, client, tenant_a, tenant_b, a_customer
+    ):
+        body = {"query_text": "Tenant A Customer"}
+        mine = client.post("/api/v1/search/customers", json=body, headers=tenant_a.auth)
+        theirs = client.post("/api/v1/search/customers", json=body, headers=tenant_b.auth)
+        assert mine.status_code == 200 and theirs.status_code == 200
+        assert [m["customer_id"] for m in mine.json()["items"]] == [a_customer["id"]]
+        assert theirs.json()["items"] == []
+
+    def test_SEC3_an_alias_is_not_searchable_from_another_tenant(
+        self, client, tenant_a, tenant_b, a_alias
+    ):
+        body = {"query_text": "Tenant A Nickname"}
+        assert client.post(
+            "/api/v1/search/customers", json=body, headers=tenant_a.auth
+        ).json()["items"]
+        assert (
+            client.post(
+                "/api/v1/search/customers", json=body, headers=tenant_b.auth
+            ).json()["items"]
+            == []
+        )
+
+    def test_SEC3_resolution_never_crosses_a_tenant(
+        self, client, tenant_a, tenant_b, a_customer
+    ):
+        body = {"reference": "Tenant A Customer"}
+        mine = client.post(
+            "/api/v1/search/customers/resolve", json=body, headers=tenant_a.auth
+        ).json()
+        theirs = client.post(
+            "/api/v1/search/customers/resolve", json=body, headers=tenant_b.auth
+        ).json()
+        assert mine["status"] == "RESOLVED"
+        assert mine["customer"]["customer_id"] == a_customer["id"]
+        # Not "somebody else's customer" and not a near miss: nobody at all.
+        assert theirs["status"] == "NOT_FOUND"
+        assert theirs["candidates"] == []
+
+    def test_SEC3_the_filter_has_nowhere_to_name_a_tenant(self, client, tenant_b, a_customer):
+        """`extra="forbid"`: a caller cannot even spell the field."""
+        resp = client.post(
+            "/api/v1/search/customers",
+            json={"query_text": "Tenant A Customer", "tenant_id": "whatever"},
+            headers=tenant_b.auth,
+        )
+        assert resp.status_code == 422
+
+    def test_SEC4_alias_routes_answer_404_for_another_tenants_customer(
+        self, client, tenant_b, a_customer, a_alias
+    ):
+        customer_id, alias_id = a_customer["id"], a_alias["id"]
+        for method, path, body in (
+            ("GET", f"/api/v1/customers/{customer_id}/aliases", None),
+            (
+                "POST",
+                f"/api/v1/customers/{customer_id}/aliases",
+                {"operation_id": str(uuid7()), "alias": "Sneaky"},
+            ),
+            (
+                "PATCH",
+                f"/api/v1/customers/{customer_id}/aliases/{alias_id}",
+                {"operation_id": str(uuid7()), "alias": "Sneaky"},
+            ),
+            (
+                "POST",
+                f"/api/v1/customers/{customer_id}/aliases/{alias_id}/deactivate",
+                {"operation_id": str(uuid7()), "reason": None},
+            ),
+        ):
+            resp = client.request(method, path, json=body, headers=tenant_b.auth)
+            assert resp.status_code == 404, f"{method} {path} -> {resp.status_code}"
+            assert resp.json()["error"]["code"] == "NOT_FOUND"
+
+    def test_SEC6_a_platform_principal_is_refused_on_every_search_route(
+        self, client, platform_token, a_customer
+    ):
+        headers = {"Authorization": f"Bearer {platform_token}"}
+        customer_id = a_customer["id"]
+        for method, path, body in (
+            ("POST", "/api/v1/search/customers", {"query_text": "Tenant A"}),
+            ("POST", "/api/v1/search/customers/resolve", {"reference": "Tenant A"}),
+            ("GET", f"/api/v1/customers/{customer_id}/aliases", None),
+            (
+                "POST",
+                f"/api/v1/customers/{customer_id}/aliases",
+                {"operation_id": str(uuid7()), "alias": "Sneaky"},
+            ),
+        ):
+            resp = client.request(method, path, json=body, headers=headers)
             assert resp.status_code == 403, f"{method} {path} -> {resp.status_code}"
             assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
 

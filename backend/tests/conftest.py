@@ -256,11 +256,16 @@ def customer_factory(db):
     def _make(ctx: TenantContext, *, code: str = "C1", price_minor: int = 25000, **kw):
         from app.customers.models import Customer
         from app.core.db import next_row_version
+        from app.search.normalize import normalize_text
 
+        name = kw.pop("name", f"Customer {code}")
         customer = Customer(
             tenant_id=ctx.tenant_id,
             code=code,
-            name=kw.pop("name", f"Customer {code}"),
+            name=name,
+            # P8: the comparison key is written by the same function every write
+            # path uses, so a fixture customer is findable exactly as a real one is.
+            normalized_name=normalize_text(name),
             area=kw.pop("area", "G-10"),
             default_quantity=kw.pop("default_quantity", Decimal("1.000")),
             unit_price_minor=price_minor,
