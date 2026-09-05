@@ -448,6 +448,11 @@ export class SyncEngine {
     // the cursor, and this device starts at `head`. Both are read to the end of
     // their pagination for the same reason customers are — a silent truncation
     // would be history that simply never appears offline.
+    //
+    // Every endpoint read here is part of the first-sync contract the e2e fixture
+    // must serve. If you add a read, add it to `e2e/server.js` and to the
+    // SEED_ENDPOINTS list in `e2e/first-sync-contract.spec.ts`, which pins the
+    // fixture to this contract and fails loudly when it drifts.
     const [customers, day, payments, statements] = await Promise.all([
       listAllCustomers({ status: "ACTIVE" }),
       getDay(settings.business_date),

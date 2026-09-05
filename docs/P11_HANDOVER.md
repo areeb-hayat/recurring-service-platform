@@ -69,7 +69,21 @@ Fix (fixture only — no product code): added the two missing seed endpoints
 returning the empty-list shape `{ items: [] }`, and aligned the feed to
 `feed_version: 3` with `payment` and `statement` in the entities list. The suite's
 own assertions are about service-record sync (CONFIRM/SKIP offline), so empty
-financial history is correct for it. **Result: 5 passed.**
+financial history is correct for it.
+
+**And the guard that was missing** — so this cannot rot silently again. P5's
+handover asked for "the tests that pin correspondence"; there was none for the
+frontend fixture. Added `frontend/e2e/first-sync-contract.spec.ts`: a fast,
+browserless Playwright test that holds the client's first-sync contract *independently*
+(the seed endpoints, the feed version, the entity set) and asserts the running
+fixture satisfies it. It fails with a message that names the drift directly —
+*"GET /api/v1/statements → 404; SyncEngine.seed() reads it"* — instead of an opaque
+browser timeout three layers down. `SyncEngine.seed()` now carries a comment
+pointing at it. Proven to fail on the exact P8 drift (fixture `feed_version` set
+back to 1 → the version assertion fails, `Expected: 3, Received: 1`), then reverted.
+The expectation deliberately lives in the test, not read out of the fixture — a
+correspondence check that read its expected values from the thing it checks would
+be tautological. **Result: 10 passed** (5 offline-sync + 5 contract).
 
 ### 1.3 CI pipeline — `.github/workflows/ci.yml` (new)
 
@@ -165,12 +179,16 @@ pip install -e ".[dev]" && pytest
 .github/workflows/ci.yml     new — CI pipeline (backend/frontend/secret-scan/dependency-audit)
 frontend/package.json        react-router-dom ^6.28.0 -> ^7.18.3
 frontend/package-lock.json   lockfile for the above
-frontend/e2e/server.js       fixture: +/payments +/statements seed endpoints; feed_version 1 -> 3
-docs/P11_HANDOVER.md          this file
-docs/SECURITY_REVIEW.md       the review notes above, standalone
+frontend/e2e/server.js               fixture: +/payments +/statements; feed_version 1->3; exported constants; import-guarded listen
+frontend/e2e/first-sync-contract.spec.ts  new — the correspondence guard (browserless)
+frontend/e2e/server.d.ts             new — types so the guard can import BUSINESS_DATE under strict tsc
+frontend/src/sync/engine.ts          comment only — signpost at seed() pointing at the guard
+docs/P11_HANDOVER.md                  this file
+docs/SECURITY_REVIEW.md               the review notes above, standalone
 ```
 
-No **application** source changed — the only test-side change is the e2e fixture
-server (§1.2), which is not shipped. No invariant was touched. No table, no
+No **application behaviour** changed — the one source-tree edit
+(`frontend/src/sync/engine.ts`) is a comment. Everything else is CI, docs, or the
+e2e test harness, none of which ships. No invariant was touched. No table, no
 runtime dependency beyond the router version bump (CI tooling aside), and no
 background service was added to the product.

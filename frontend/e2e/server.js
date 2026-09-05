@@ -21,13 +21,32 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../dist", import.meta.url));
 const PORT = Number(process.env.E2E_PORT ?? 4173);
 
-const BUSINESS_DATE = "2026-09-03";
+export const BUSINESS_DATE = "2026-09-03";
 const CUSTOMER_COUNT = 12;
+
+/**
+ * The feed version this fixture serves, and the entities it names. This file's
+ * half of the contract with the real client rotted silently once already: P6
+ * took the feed to 2 and added `payment`/`statement`, P8 took it to 3, and this
+ * fixture — frozen since P5 — kept saying 1 and served neither seed endpoint, so
+ * every test died at sign-in as "not synchronised". `first-sync-contract.spec.ts`
+ * now holds the *independent* expectation and fails if the values below drift
+ * from it — so bump these when the real feed changes, and that spec will confirm
+ * (or catch) it.
+ */
+export const FEED_VERSION = 3;
+export const FEED_ENTITIES = [
+  "tenant",
+  "customer",
+  "daily_service_record",
+  "payment",
+  "statement",
+];
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -204,19 +223,8 @@ function changesSince(since, limit) {
     cursor: page.length ? page[page.length - 1].row_version : since,
     has_more: rows.length > limit,
     head: state.rowVersion,
-    // Track the server's real SYNC_FEED_VERSION: P6 took it to 2 (payment,
-    // statement joined the feed) and P8 to 3 (aliases travel in the customer
-    // payload). The fixture serves no payment/statement/alias rows, but it must
-    // report the version the client now expects so a re-seed is never spuriously
-    // triggered mid-suite.
-    feed_version: 3,
-    entities: [
-      "tenant",
-      "customer",
-      "daily_service_record",
-      "payment",
-      "statement",
-    ],
+    feed_version: FEED_VERSION,
+    entities: FEED_ENTITIES,
     changes: page,
   };
 }
@@ -368,6 +376,11 @@ const server = createServer(async (req, res) => {
   await serveStatic(url, res);
 });
 
-server.listen(PORT, () => {
-  process.stdout.write(`e2e fixture server on http://localhost:${PORT}\n`);
-});
+// Bind the port only when run directly (`node e2e/server.js`, as the Playwright
+// webServer does). Importing this module for its constants — the contract test —
+// must not try to listen on a port the running fixture already holds.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  server.listen(PORT, () => {
+    process.stdout.write(`e2e fixture server on http://localhost:${PORT}\n`);
+  });
+}
