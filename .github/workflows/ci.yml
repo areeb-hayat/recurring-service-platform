@@ -1,0 +1,141 @@
+# Continuous integration — the "final regression suite" automated (P11).
+#
+# This is the CI home the acceptance contract already assumes exists:
+#   - A-SEC-9  : a secret scan runs in CI over the whole tree and fails on a hit.
+#   - A-SLOT-6 : the vendor-name grep runs in CI (it lives in backend pytest,
+#                which this workflow runs — see tests/test_architecture.py).
+#   - P11      : full backend + frontend + e2e regression, plus dependency review.
+#
+# It runs nothing that the local instructions in CLAUDE.md do not already run by
+# hand; it just runs them on every push and pull request so a regression cannot
+# land unseen.
+name: CI
+
+on:
+  push:
+    branches: [main, yahya, areeb]
+  pull_request:
+    branches: [main, yahya, areeb]
+
+# One in-flight run per branch; a newer push cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Backend: the real PostgreSQL suite. SQLite is never substituted (conftest
+  # aborts collection without TEST_DATABASE_URL), so CI gives it a real database.
+  # This job also runs the source-level architecture guards (A-SLOT-5/6, FIN-1,
+  # AUD-1, SEC-9 env-example) that live in tests/test_architecture.py.
+  # --------------------------------------------------------------------------
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rsp_test
+        ports:
+          - 5432:5432
+        # Migrations run CREATE EXTENSION (pg_trgm, btree_gist); the default
+        # superuser can, so a stock image needs no extra provisioning.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rsp_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      # A-SLOT-1: the whole suite passes on mocks with no network access.
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/rsp_test
+      COMMS_PROVIDER: mock
+      SPEECH_PROVIDER: mock
+      GROQ_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Pytest (real PostgreSQL)
+        run: pytest -q
+
+  # --------------------------------------------------------------------------
+  # Frontend: unit + typecheck + production build + Playwright e2e.
+  # The e2e suite tests the real Service Worker against the built dist/, so the
+  # build must precede it in the same job.
+  # --------------------------------------------------------------------------
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests (Vitest)
+        run: npm test
+      - name: Production build
+        run: npm run build
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: E2E (Playwright, against dist/)
+        run: npm run e2e
+
+  # --------------------------------------------------------------------------
+  # A-SEC-9: a secret scan over the whole tree, including history. A hit fails
+  # the build. Uses the official gitleaks image with its default ruleset — no
+  # config to drift, and it scans the full git history mounted at /repo.
+  # --------------------------------------------------------------------------
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so a secret in an old commit is caught
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest \
+            detect --source /repo --redact --no-banner --verbose
+
+  # --------------------------------------------------------------------------
+  # Dependency advisory review (P11). The react-router-dom v6 advisory that P11
+  # named is closed by the v7 upgrade; this gate keeps a new one from creeping
+  # back in unseen. Threshold is moderate — raise it here if a transitive dev
+  # advisory with no available fix ever blocks unrelated work.
+  # --------------------------------------------------------------------------
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: npm audit (frontend)
+        working-directory: frontend
+        run: npm audit --audit-level=moderate
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit (backend)
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          pip install -e .
+          pip-audit

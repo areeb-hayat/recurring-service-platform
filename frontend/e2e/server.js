@@ -204,8 +204,19 @@ function changesSince(since, limit) {
     cursor: page.length ? page[page.length - 1].row_version : since,
     has_more: rows.length > limit,
     head: state.rowVersion,
-    feed_version: 1,
-    entities: ["tenant", "customer", "daily_service_record"],
+    // Track the server's real SYNC_FEED_VERSION: P6 took it to 2 (payment,
+    // statement joined the feed) and P8 to 3 (aliases travel in the customer
+    // payload). The fixture serves no payment/statement/alias rows, but it must
+    // report the version the client now expects so a re-seed is never spuriously
+    // triggered mid-suite.
+    feed_version: 3,
+    entities: [
+      "tenant",
+      "customer",
+      "daily_service_record",
+      "payment",
+      "statement",
+    ],
     changes: page,
   };
 }
@@ -318,6 +329,14 @@ const server = createServer(async (req, res) => {
         ),
       });
     }
+
+    // P6 added payment and statement to the first-sync seed (`SyncEngine.seed`
+    // reads them to the end of their pagination). This fixture has no financial
+    // history to serve — the offline acceptance cases are about service records —
+    // but the endpoints must exist and return the empty list shape, or the seed's
+    // `Promise.all` rejects on a 404 and the app never leaves "not synchronised".
+    if (path === "/api/v1/payments") return json(res, 200, { items: [] });
+    if (path === "/api/v1/statements") return json(res, 200, { items: [] });
 
     if (path === "/api/v1/sync/changes") {
       return json(
